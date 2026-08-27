@@ -1,0 +1,69 @@
+:root {
+  color: #edf4e7;
+  background: #0b0f0c;
+  font-family: "Avenir Next", Avenir, Inter, system-ui, sans-serif;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-width: 320px; min-height: 100%; overflow: hidden; }
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 85% 15%, rgba(190, 255, 61, .08), transparent 28rem),
+    #0b0f0c;
+}
+
+.shell { height: 100vh; padding: clamp(18px, 3vw, 38px); display: flex; flex-direction: column; gap: 18px; }
+.topbar { display: flex; align-items: flex-end; justify-content: space-between; flex: 0 0 auto; }
+h1, h2, p { margin: 0; }
+h1 { font-size: clamp(24px, 3vw, 42px); line-height: 1; letter-spacing: -.055em; }
+.eyebrow { color: #baf43c; font: 500 10px/1.2 "DM Mono", monospace; letter-spacing: .18em; text-transform: uppercase; margin-bottom: 7px; }
+.connection { color: #8e9c8d; font: 500 11px "DM Mono", monospace; text-transform: uppercase; letter-spacing: .08em; display: flex; gap: 8px; align-items: center; }
+.connection span { width: 7px; height: 7px; border-radius: 50%; background: #e8b13f; box-shadow: 0 0 0 4px rgba(232,177,63,.1); }
+.connection.online span { background: #baf43c; box-shadow: 0 0 0 4px rgba(186,244,60,.1); }
+.connection.offline span { background: #ff6258; }
+
+.game-card { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; border: 1px solid #263029; border-radius: 18px; background: #111713; box-shadow: 0 24px 90px rgba(0,0,0,.35); }
+#track { display: block; width: 100%; height: 100%; }
+.hud { position: absolute; top: 18px; left: 18px; display: grid; grid-template-columns: repeat(3, auto); gap: 1px; overflow: hidden; border: 1px solid #344036; border-radius: 10px; background: #1c241ebf; backdrop-filter: blur(10px); }
+.metric { min-width: 72px; padding: 9px 12px; display: grid; grid-template-columns: auto auto; align-items: baseline; column-gap: 5px; border-right: 1px solid #344036; }
+.metric:last-child { border: 0; }
+.metric span { grid-column: 1 / -1; color: #819084; font: 500 9px "DM Mono", monospace; letter-spacing: .1em; text-transform: uppercase; }
+.metric strong { font: 500 17px "DM Mono", monospace; color: #f4f7ee; }
+.metric small { color: #819084; font: 400 10px "DM Mono", monospace; }
+.metric.wide { min-width: 98px; }
+
+.sensor-panel { position: absolute; right: 18px; top: 65px; width: 116px; padding: 11px 12px; border: 1px solid #344036; border-radius: 10px; background: #1c241ebf; backdrop-filter: blur(10px); }
+.sensor-panel > p { margin-bottom: 7px; color: #819084; font: 500 9px "DM Mono", monospace; letter-spacing: .09em; text-transform: uppercase; }
+.sensor-panel > div { display: flex; justify-content: space-between; padding: 3px 0; color: #90a095; font: 500 10px "DM Mono", monospace; }
+.sensor-panel strong { color: #dfff9c; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.prompt, .crash { position: absolute; inset: 50% auto auto 50%; translate: -50% -50%; width: min(340px, calc(100% - 36px)); text-align: center; padding: 26px; border: 1px solid #38443a; border-radius: 14px; background: rgba(15,21,17,.92); box-shadow: 0 20px 70px rgba(0,0,0,.4); backdrop-filter: blur(12px); transition: opacity .2s, scale .2s; }
+.prompt.hidden, .crash { opacity: 0; scale: .96; pointer-events: none; }
+.crash.visible { opacity: 1; scale: 1; }
+.prompt h2, .crash h2 { font-size: 25px; letter-spacing: -.04em; }
+.prompt > p:last-child, .crash > p:last-child { margin-top: 13px; color: #93a095; font-size: 12px; }
+.keys { margin: 20px auto 0; width: 114px; display: grid; grid-template-columns: repeat(3, 34px); gap: 6px; }
+kbd { display: inline-grid; place-items: center; min-width: 27px; height: 27px; padding: 0 6px; border: 1px solid #4b594e; border-bottom-width: 3px; border-radius: 5px; color: #eaf2e5; background: #202a22; font: 500 12px "DM Mono", monospace; }
+.keys kbd { height: 34px; }
+.toast { position: absolute; top: 22px; left: 50%; translate: -50% -10px; padding: 9px 14px; border: 1px solid rgba(186,244,60,.4); border-radius: 999px; background: rgba(20,29,20,.9); color: #dfff9c; font: 500 11px "DM Mono", monospace; opacity: 0; transition: .2s; }
+.toast.visible { opacity: 1; translate: -50% 0; }
+.restart { position: absolute; right: 18px; top: 18px; border: 1px solid #3d493f; border-radius: 9px; padding: 9px 12px; color: #dce5d8; background: rgba(28,36,30,.88); font: 600 12px "Avenir Next", Avenir, Inter, system-ui, sans-serif; cursor: pointer; backdrop-filter: blur(10px); }
+.restart:hover { border-color: #baf43c; color: #baf43c; }
+.restart span { margin-right: 5px; }
+.controls-hint { position: absolute; bottom: 15px; left: 50%; translate: -50% 0; color: #758078; font: 500 10px "DM Mono", monospace; white-space: nowrap; }
+.controls-hint b { color: #c7d1c3; font-weight: 500; }
+
+@media (max-width: 720px) {
+  .shell { padding: 12px; gap: 12px; }
+  .topbar .connection { font-size: 0; }
+  .game-card { border-radius: 12px; }
+  .hud { top: 10px; left: 10px; }
+  .restart { top: 10px; right: 10px; }
+  .sensor-panel { top: 54px; right: 10px; width: 104px; padding: 8px 10px; }
+  .metric { min-width: 56px; padding: 7px 8px; }
+  .metric.wide { min-width: 82px; }
+  .metric strong { font-size: 14px; }
+  .controls-hint { display: none; }
+}

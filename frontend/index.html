@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101511" />
+    <title>RL Racer — Sensor Sandbox</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Milestone 02</p>
+          <h1>Sensor Sandbox</h1>
+        </div>
+        <div class="connection" id="connection"><span></span> Connecting</div>
+      </header>
+
+      <section class="game-card">
+        <canvas id="track" aria-label="Top-down go-kart track"></canvas>
+
+        <div class="hud" aria-live="polite">
+          <div class="metric speed"><span>Speed</span><strong id="speed">0.0</strong><small>/ 12</small></div>
+          <div class="metric"><span>Lap</span><strong id="lap">1</strong></div>
+          <div class="metric wide"><span>Time</span><strong id="time">00:00.0</strong></div>
+          <div class="metric wide"><span>Best</span><strong id="best">—</strong></div>
+        </div>
+
+        <aside class="sensor-panel" aria-label="Normalized distance sensor readings">
+          <p>Distance sensors</p>
+          <div><span>L60</span><strong data-sensor="0">—</strong></div>
+          <div><span>L30</span><strong data-sensor="1">—</strong></div>
+          <div><span>MID</span><strong data-sensor="2">—</strong></div>
+          <div><span>R30</span><strong data-sensor="3">—</strong></div>
+          <div><span>R60</span><strong data-sensor="4">—</strong></div>
+        </aside>
+
+        <div class="prompt" id="prompt">
+          <p class="eyebrow">Take the wheel</p>
+          <h2>Drive a clean lap</h2>
+          <div class="keys" aria-label="Arrow key controls">
+            <span></span><kbd>↑</kbd><span></span>
+            <kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd>
+          </div>
+          <p>Arrows or WASD · throttle, brake and steer</p>
+        </div>
+
+        <div class="toast" id="toast"></div>
+        <div class="crash" id="crash">
+          <p class="eyebrow">Off track</p>
+          <h2>That’ll buff out.</h2>
+          <p>Press <kbd>R</kbd> or Space to restart.</p>
+        </div>
+
+        <button class="restart" id="restart" type="button" title="Restart (R or Space)">
+          <span>↻</span> Restart
+        </button>
+        <div class="controls-hint"><b>↑ / W</b> throttle <b>↓ / S</b> brake <b>← → / A D</b> steer</div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
