@@ -485,14 +485,16 @@ Instead, expose a small set of egocentric sensor readings.
 
 ## Distance sensors
 
-Cast five rays from the car:
+Cast seven rays from the car:
 
 ```text
+-90°
 -60°
 -30°
   0°
 +30°
 +60°
++90°
 ```
 
 Each returns distance to the nearest track boundary.
@@ -863,8 +865,8 @@ Large Canvas showing:
 * start/finish
 * checkpoints optionally
 * car
-* five sensor rays
-* current evaluation trajectory
+* seven sensor rays
+* one selected evaluation trajectory or all checkpoint trajectories overlaid for comparison
 
 The car should clearly show orientation.
 
@@ -1096,11 +1098,21 @@ GET /api/track
 WebSocket /ws/play
 ```
 
-`GET /api/track` includes the track geometry plus sensor angles and maximum range. Each `/ws/play` state includes five normalized sensor readings ordered from `-60°` through `+60°`.
+`GET /api/track` includes the track geometry plus sensor angles and maximum range. Each `/ws/play` state includes seven normalized sensor readings ordered from `-90°` through `+90°`.
 
-The training milestones add the following API:
+The implemented replay milestones add the following API:
 
 ## HTTP
+
+```text
+GET /api/runs
+GET /api/runs/{run_id}/replays
+GET /api/runs/{run_id}/replays/latest
+GET /api/runs/{run_id}/replays/{training_episode}
+GET /api/runs/{run_id}/trajectories
+```
+
+The training dashboard may later add browser-controlled training endpoints:
 
 ```text
 POST /training/start
@@ -1112,7 +1124,7 @@ GET /config
 POST /config
 ```
 
-## WebSocket
+## Future training WebSocket
 
 ```text
 /ws/training
@@ -1159,7 +1171,7 @@ Example:
       "y": 5.8,
       "heading": 1.73,
       "speed": 4.2,
-      "sensors": [0.2, 0.4, 0.9, 0.7, 0.3],
+      "sensors": [0.1, 0.2, 0.4, 0.9, 0.7, 0.3, 0.1],
       "action": "LEFT_THROTTLE",
       "q_values": [...]
     }

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import inf, nan
+from math import cos, inf, nan, pi, sin
 from random import Random
 
 import pytest
 
 from backend.env.environment import DiscreteAction, Observation, RacingEnv, StepResult
 from backend.rl import (
+    LOW_SPEED_TABULAR_ACTIONS,
     TABULAR_ACTIONS,
     TABULAR_STATE_COUNT,
     GreedyPolicy,
@@ -17,16 +18,24 @@ from backend.rl import (
 )
 from backend.training import evaluate_policy, run_training, run_training_episode
 
-ZERO_OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
-NEXT_OBSERVATION: Observation = (0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.0, 1.0)
+
+def with_side_rays(observation: tuple[float, ...]) -> Observation:
+    """Expand a legacy five-ray observation with neutral side-ray values."""
+    assert len(observation) == 10
+    return (0.0, *observation[:5], 0.0, *observation[5:])
+
+
+ZERO_OBSERVATION = with_side_rays((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0))
+NEXT_OBSERVATION = with_side_rays((0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.0, 1.0))
+MOVING_OBSERVATION = with_side_rays((0.2, 0.3, 0.7, 0.4, 0.2, 0.2, 0.25, 0.1, 0.0, 1.0))
 
 
 def test_discretizer_clamps_values_and_handles_bucket_boundaries() -> None:
-    observation: Observation = (-0.1, 0.039, 0.04, 0.3, 1.0, 1.2, 1.2, -1.2, 0.0, 1.0)
+    observation = with_side_rays((-0.1, 0.039, 0.04, 0.3, 1.0, 1.2, 1.2, -1.2, 0.0, 1.0))
 
-    assert StateDiscretizer(5).discretize(observation) == (0, 0, 1, 4, 5, 4, 3)
-    assert StateDiscretizer(5).discretize((1.0,) * 10) == (5, 5, 5, 5, 5, 4, 3)
-    assert TABULAR_STATE_COUNT == 155_520
+    assert StateDiscretizer(5).discretize(observation) == (0, 0, 1, 4, 5, 4, 0, 2)
+    assert StateDiscretizer(5).discretize((1.0,) * 12) == (5, 5, 5, 5, 5, 4, 2, 3)
+    assert TABULAR_STATE_COUNT == 583_200
 
 
 @pytest.mark.parametrize(
@@ -45,7 +54,7 @@ def test_discretizer_clamps_values_and_handles_bucket_boundaries() -> None:
     ],
 )
 def test_sensor_bucket_boundaries(value: float, expected: int) -> None:
-    observation: Observation = (value, 1, 1, 1, 1, 0, 0, 0, 0, 1)
+    observation = with_side_rays((value, 1, 1, 1, 1, 0, 0, 0, 0, 1))
     assert StateDiscretizer().discretize(observation)[0] == expected
 
 
@@ -54,29 +63,51 @@ def test_sensor_bucket_boundaries(value: float, expected: int) -> None:
     [(0.0999, 0), (0.10, 1), (0.2499, 1), (0.25, 2), (0.70, 4)],
 )
 def test_speed_bucket_boundaries(speed: float, expected: int) -> None:
-    observation: Observation = (0, 0, 0, 0, 0, speed, 0, 0, 0, 1)
+    observation = with_side_rays((0, 0, 0, 0, 0, speed, 0, 0, 0, 1))
     assert StateDiscretizer().discretize(observation)[5] == expected
 
 
 @pytest.mark.parametrize(
-    ("progress", "expected"),
-    [(0.2499, 0), (0.25, 1), (0.4999, 1), (0.50, 2), (0.75, 3), (1.0, 3)],
+    ("lateral", "expected"),
+    [(-1, 0), (-0.5001, 0), (-0.5, 1), (0.4999, 1), (0.5, 2), (1, 2)],
 )
-def test_progress_sector_boundaries(progress: float, expected: int) -> None:
-    observation: Observation = (0, 0, 0, 0, 0, 0, progress, 0, 0, 1)
+def test_lateral_bucket_boundaries(lateral: float, expected: int) -> None:
+    observation = with_side_rays((0, 0, 0, 0, 0, 0, 0, lateral, 0, 1))
     assert StateDiscretizer().discretize(observation)[6] == expected
+
+
+@pytest.mark.parametrize(
+    ("angle", "expected"),
+    [
+        (-pi, 0),
+        (-pi / 3, 1),
+        (-pi / 12, 2),
+        (pi / 12, 3),
+        (pi / 3, 4),
+        (pi, 4),
+    ],
+)
+def test_heading_bucket_boundaries(angle: float, expected: int) -> None:
+    observation = with_side_rays((0, 0, 0, 0, 0, 0, 0, 0, sin(angle), cos(angle)))
+    assert StateDiscretizer().discretize(observation)[7] == expected
+
+
+def test_absolute_progress_does_not_change_local_tabular_state() -> None:
+    before = with_side_rays((0.2, 0.3, 0.7, 0.4, 0.2, 0.2, 0.2499, 0.1, 0.0, 1.0))
+    after = with_side_rays((0.2, 0.3, 0.7, 0.4, 0.2, 0.2, 0.25, 0.1, 0.0, 1.0))
+    assert StateDiscretizer().discretize(before) == StateDiscretizer().discretize(after)
 
 
 @pytest.mark.parametrize("value", [nan, inf, -inf])
 def test_discretizer_rejects_non_finite_values(value: float) -> None:
     with pytest.raises(ValueError, match="finite"):
-        StateDiscretizer().discretize((value, 0, 0, 0, 0, 0, 0, 0, 0, 1))
+        StateDiscretizer().discretize(with_side_rays((value, 0, 0, 0, 0, 0, 0, 0, 0, 1)))
 
 
 def test_discretizer_validates_shape_and_bucket_count() -> None:
     with pytest.raises(ValueError, match="requires five"):
         StateDiscretizer(1)
-    with pytest.raises(ValueError, match="ten"):
+    with pytest.raises(ValueError, match="12"):
         StateDiscretizer().discretize((0.0,) * 5)
 
 
@@ -153,7 +184,7 @@ def test_epsilon_reheats_and_starts_a_new_transition_schedule() -> None:
     assert agent.epsilon == pytest.approx(0.2)
 
 
-def test_seeded_exploration_uses_only_the_seven_active_actions() -> None:
+def test_seeded_exploration_respects_speed_eligible_actions() -> None:
     config = QLearningConfig(epsilon_start=1, epsilon_min=1)
     first = QLearningAgent(Random(12), config)
     second = QLearningAgent(Random(12), config)
@@ -161,7 +192,10 @@ def test_seeded_exploration_uses_only_the_seven_active_actions() -> None:
         second.choose_action(ZERO_OBSERVATION) for _ in range(20)
     ]
 
-    assert set(first.choose_action(ZERO_OBSERVATION) for _ in range(500)) == set(TABULAR_ACTIONS)
+    assert set(first.choose_action(ZERO_OBSERVATION) for _ in range(500)) == set(
+        LOW_SPEED_TABULAR_ACTIONS
+    )
+    assert set(first.choose_action(MOVING_OBSERVATION) for _ in range(500)) == set(TABULAR_ACTIONS)
 
 
 def test_greedy_policy_is_sticky_and_tie_breaking_is_deterministic() -> None:
@@ -169,28 +203,60 @@ def test_greedy_policy_is_sticky_and_tie_breaking_is_deterministic() -> None:
         Random(1),
         QLearningConfig(epsilon_start=0, epsilon_min=0, sticky_tolerance=0.03),
     )
-    state = agent.discretizer.discretize(ZERO_OBSERVATION)
+    state = agent.discretizer.discretize(MOVING_OBSERVATION)
     agent.q_table.set_value(state, DiscreteAction.RIGHT, 1.0)
     agent.q_table.set_value(state, DiscreteAction.LEFT, 0.98)
     policy = GreedyPolicy(agent, previous_action=DiscreteAction.LEFT)
-    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.LEFT
+    assert policy.choose_action(MOVING_OBSERVATION) == DiscreteAction.LEFT
 
     agent.q_table.set_value(state, DiscreteAction.LEFT, 0.96)
-    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.RIGHT
+    assert policy.choose_action(MOVING_OBSERVATION) == DiscreteAction.RIGHT
 
     agent.q_table.set_value(state, DiscreteAction.LEFT, 1.0)
     policy.previous_action = None
-    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.LEFT
+    assert policy.choose_action(MOVING_OBSERVATION) == DiscreteAction.LEFT
     policy.previous_action = DiscreteAction.RIGHT
-    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.RIGHT
+    assert policy.choose_action(MOVING_OBSERVATION) == DiscreteAction.RIGHT
 
     empty_policy = GreedyPolicy(QLearningAgent(Random(2)))
-    assert empty_policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.COAST
+    assert empty_policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.THROTTLE
     empty_policy.start_episode()
     assert empty_policy.previous_action is None
 
 
-def test_inactive_actions_are_masked_and_excluded_from_bootstrapping() -> None:
+def test_unseen_state_does_not_stick_with_brake_across_the_25_percent_boundary() -> None:
+    agent = QLearningAgent(Random(2), QLearningConfig(epsilon_start=0, epsilon_min=0))
+    policy = GreedyPolicy(agent, previous_action=DiscreteAction.BRAKE)
+
+    assert policy.choose_action(MOVING_OBSERVATION) == DiscreteAction.COAST
+
+    stopped = (*MOVING_OBSERVATION[:7], 0.0, *MOVING_OBSERVATION[8:])
+    policy.previous_action = DiscreteAction.BRAKE
+    assert policy.choose_action(stopped) == DiscreteAction.THROTTLE
+
+
+def test_low_speed_known_state_selects_and_bootstraps_only_propulsive_actions() -> None:
+    config = QLearningConfig(
+        learning_rate=1,
+        discount=1,
+        epsilon_start=0,
+        epsilon_min=0,
+    )
+    agent = QLearningAgent(Random(3), config)
+    low_next = with_side_rays((0.3, 0.3, 0.3, 0.3, 0.3, 0.05, 0.3, 0.0, 0.0, 1.0))
+    next_state = agent.discretizer.discretize(low_next)
+    agent.q_table.set_value(next_state, DiscreteAction.BRAKE, 100)
+    agent.q_table.set_value(next_state, DiscreteAction.LEFT_THROTTLE, 4)
+
+    policy = GreedyPolicy(agent, previous_action=DiscreteAction.BRAKE)
+    assert policy.choose_action(low_next) == DiscreteAction.LEFT_THROTTLE
+
+    agent.update(MOVING_OBSERVATION, DiscreteAction.COAST, 0, low_next, False)
+    state = agent.discretizer.discretize(MOVING_OBSERVATION)
+    assert agent.q_table.value(state, DiscreteAction.COAST) == 4
+
+
+def test_brake_and_steer_actions_are_selected_and_used_for_bootstrapping() -> None:
     agent = QLearningAgent(
         Random(1),
         QLearningConfig(
@@ -203,14 +269,15 @@ def test_inactive_actions_are_masked_and_excluded_from_bootstrapping() -> None:
     next_state = agent.discretizer.discretize(NEXT_OBSERVATION)
     for action in TABULAR_ACTIONS:
         agent.q_table.set_value(next_state, action, -2)
-    agent.q_table.set_value(next_state, DiscreteAction.LEFT_BRAKE, 100)
-    agent.q_table.set_value(next_state, DiscreteAction.RIGHT_BRAKE, 100)
+    agent.q_table.set_value(next_state, DiscreteAction.LEFT_BRAKE, 4)
+    agent.q_table.set_value(next_state, DiscreteAction.RIGHT_BRAKE, 3)
 
-    assert agent.q_values(NEXT_OBSERVATION)[5] == 0
-    assert agent.q_values(NEXT_OBSERVATION)[8] == 0
+    assert GreedyPolicy(agent).choose_action(NEXT_OBSERVATION) == DiscreteAction.LEFT_BRAKE
+    assert agent.q_values(NEXT_OBSERVATION)[5] == 4
+    assert agent.q_values(NEXT_OBSERVATION)[8] == 3
     agent.update(ZERO_OBSERVATION, DiscreteAction.THROTTLE, 0, NEXT_OBSERVATION, False)
     state = agent.discretizer.discretize(ZERO_OBSERVATION)
-    assert agent.q_table.value(state, DiscreteAction.THROTTLE) == -2
+    assert agent.q_table.value(state, DiscreteAction.THROTTLE) == 4
 
 
 @dataclass
@@ -225,7 +292,7 @@ class TwoStepEnvironment:
         del action
         self.step_number += 1
         done = self.step_number == 2
-        observation = NEXT_OBSERVATION if not done else (0.7,) * 10
+        observation = NEXT_OBSERVATION if not done else (0.7,) * 12
         return StepResult(
             observation=observation,
             reward=float(self.step_number),

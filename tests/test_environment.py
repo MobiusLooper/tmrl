@@ -36,9 +36,9 @@ def test_reset_returns_only_normalized_observation_and_clears_episode() -> None:
 
     observation = environment.reset()
 
-    assert len(observation) == 10
-    assert all(0.0 <= value <= 1.0 for value in observation[:7])
-    assert all(-1.0 <= value <= 1.0 for value in observation[7:])
+    assert len(observation) == 12
+    assert all(0.0 <= value <= 1.0 for value in observation[:9])
+    assert all(-1.0 <= value <= 1.0 for value in observation[9:])
     assert environment.steps == 0
     assert environment.current_checkpoint == 0
     assert environment.furthest_checkpoint == 0
@@ -138,8 +138,8 @@ def test_observation_exposes_normalized_track_context() -> None:
     result = environment.step(DiscreteAction.COAST)
 
     assert isinstance(result.observation, tuple)
-    assert len(result.observation) == 10
-    assert result.observation[6] == 0
+    assert len(result.observation) == 12
+    assert result.observation[8] == 0
     assert set(result.info) == {
         "steps",
         "elapsed_time",

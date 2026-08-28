@@ -5,10 +5,10 @@ from random import Random
 
 from backend.env.environment import DiscreteAction, Observation
 
-from .discretisation import StateDiscretizer
+from .discretisation import OBSERVATION_SIZE, SPEED_INDEX, SPEED_THRESHOLDS, StateDiscretizer
 from .q_table import QTable
 
-TABULAR_ARCHITECTURE = "tabular-smooth-v3"
+TABULAR_ARCHITECTURE = "tabular-local-v5"
 LEGACY_TABULAR_ARCHITECTURE = "tabular-legacy"
 TABULAR_ACTIONS = (
     DiscreteAction.COAST,
@@ -16,13 +16,17 @@ TABULAR_ACTIONS = (
     DiscreteAction.BRAKE,
     DiscreteAction.LEFT,
     DiscreteAction.LEFT_THROTTLE,
+    DiscreteAction.LEFT_BRAKE,
     DiscreteAction.RIGHT,
     DiscreteAction.RIGHT_THROTTLE,
-)
-INACTIVE_TABULAR_ACTIONS = (
-    DiscreteAction.LEFT_BRAKE,
     DiscreteAction.RIGHT_BRAKE,
 )
+LOW_SPEED_TABULAR_ACTIONS = (
+    DiscreteAction.THROTTLE,
+    DiscreteAction.LEFT_THROTTLE,
+    DiscreteAction.RIGHT_THROTTLE,
+)
+LOW_SPEED_THRESHOLD = SPEED_THRESHOLDS[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +61,7 @@ class QLearningConfig:
         if not self.architecture:
             raise ValueError("architecture must not be empty")
         if self.architecture == TABULAR_ARCHITECTURE and self.bucket_count != 5:
-            raise ValueError("the smooth tabular architecture requires five sensor thresholds")
+            raise ValueError("the local tabular architecture requires five sensor thresholds")
         if self.architecture != TABULAR_ARCHITECTURE and self.bucket_count < 2:
             raise ValueError("bucket_count must be at least 2")
         if self.action_repeat < 1:
@@ -94,13 +98,17 @@ class QLearningAgent:
         self.previous_action = None
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
+        state = self.discretizer.discretize(observation)
+        eligible_actions = eligible_tabular_actions(observation)
         if self.rng.random() < self.epsilon:
-            action = self.rng.choice(TABULAR_ACTIONS)
+            action = self.rng.choice(eligible_actions)
         else:
             action = _choose_tabular_action(
                 self.q_values(observation),
                 self.previous_action,
                 self.config.sticky_tolerance,
+                eligible_actions,
+                self.q_table.contains(state),
             )
         self.previous_action = action
         return action
@@ -118,13 +126,16 @@ class QLearningAgent:
         if not isinstance(action, DiscreteAction):
             raise TypeError("action must be a DiscreteAction")
         if action not in TABULAR_ACTIONS:
-            raise ValueError("action is not active in the smooth tabular architecture")
+            raise ValueError("action is not active in the local tabular architecture")
         if duration < 1:
             raise ValueError("duration must be positive")
         state = self.discretizer.discretize(observation)
         current = self.q_table.value(state, action)
         next_values = self.q_values(next_observation)
-        future = 0.0 if done else max(next_values[int(action)] for action in TABULAR_ACTIONS)
+        future = 0.0 if done else max(
+            next_values[int(next_action)]
+            for next_action in eligible_tabular_actions(next_observation)
+        )
         target = float(reward) + self.config.discount**duration * future
         updated = current + self.config.learning_rate * (target - current)
         self.q_table.set_value(state, action, updated)
@@ -165,10 +176,7 @@ class QLearningAgent:
         )
 
     def q_values(self, observation: Observation) -> tuple[float, ...]:
-        values = list(self.q_table.values(self.discretizer.discretize(observation)))
-        for action in INACTIVE_TABULAR_ACTIONS:
-            values[int(action)] = 0.0
-        return tuple(values)
+        return self.q_table.values(self.discretizer.discretize(observation))
 
     @property
     def visited_states(self) -> int:
@@ -185,10 +193,13 @@ class GreedyPolicy:
         self.previous_action = None
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
+        state = self.agent.discretizer.discretize(observation)
         action = _choose_tabular_action(
             self.agent.q_values(observation),
             self.previous_action,
             self.agent.config.sticky_tolerance,
+            eligible_tabular_actions(observation),
+            self.agent.q_table.contains(state),
         )
         self.previous_action = action
         return action
@@ -201,20 +212,41 @@ def _choose_tabular_action(
     values: tuple[float, ...],
     previous_action: DiscreteAction | None,
     sticky_tolerance: float,
+    eligible_actions: tuple[DiscreteAction, ...],
+    state_known: bool,
 ) -> DiscreteAction:
     if len(values) != len(DiscreteAction):
         raise ValueError("tabular action selection requires nine Q-values")
-    best_value = max(values[int(action)] for action in TABULAR_ACTIONS)
+    if not eligible_actions:
+        raise ValueError("tabular action selection requires at least one eligible action")
+    preferred_action = (
+        DiscreteAction.THROTTLE
+        if eligible_actions == LOW_SPEED_TABULAR_ACTIONS
+        else DiscreteAction.COAST
+    )
+    if not state_known:
+        return preferred_action
+    best_value = max(values[int(action)] for action in eligible_actions)
     if (
-        previous_action in TABULAR_ACTIONS
+        previous_action in eligible_actions
         and values[int(previous_action)] >= best_value - sticky_tolerance
     ):
         return previous_action
     candidates = [
-        action for action in TABULAR_ACTIONS if values[int(action)] == best_value
+        action for action in eligible_actions if values[int(action)] == best_value
     ]
     if previous_action in candidates:
         return previous_action
-    if DiscreteAction.COAST in candidates:
-        return DiscreteAction.COAST
+    if preferred_action in candidates:
+        return preferred_action
     return candidates[0]
+
+
+def eligible_tabular_actions(observation: Observation) -> tuple[DiscreteAction, ...]:
+    if len(observation) != OBSERVATION_SIZE:
+        raise ValueError(f"observation must contain {OBSERVATION_SIZE} values")
+    return (
+        LOW_SPEED_TABULAR_ACTIONS
+        if float(observation[SPEED_INDEX]) < LOW_SPEED_THRESHOLD
+        else TABULAR_ACTIONS
+    )

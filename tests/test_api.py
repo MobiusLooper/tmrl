@@ -19,7 +19,7 @@ def test_track_endpoint() -> None:
     assert response.status_code == 200
     assert response.json()["track_width"] > 0
     assert response.json()["sensors"] == {
-        "angles": [-60.0, -30.0, 0.0, 30.0, 60.0],
+        "angles": [-90.0, -60.0, -30.0, 0.0, 30.0, 60.0, 90.0],
         "max_range": 12.0,
     }
 
@@ -27,7 +27,7 @@ def test_track_endpoint() -> None:
 def test_websocket_accepts_input_and_reset() -> None:
     with client.websocket_connect("/ws/play") as websocket:
         initial = websocket.receive_json()
-        assert len(initial["sensors"]) == 5
+        assert len(initial["sensors"]) == 7
         assert all(0 <= reading <= 1 for reading in initial["sensors"])
         websocket.send_json(
             {"type": "input", "seq": 1, "throttle": True, "brake": False, "left": False, "right": False}
@@ -37,7 +37,7 @@ def test_websocket_accepts_input_and_reset() -> None:
             moving = websocket.receive_json()
         assert moving["tick"] > initial["tick"]
         assert moving["speed"] > 0
-        assert len(moving["sensors"]) == 5
+        assert len(moving["sensors"]) == 7
 
         websocket.send_json({"type": "reset"})
         reset = websocket.receive_json()
@@ -45,7 +45,7 @@ def test_websocket_accepts_input_and_reset() -> None:
             reset = websocket.receive_json()
         assert reset["speed"] == 0
         assert not reset["crashed"]
-        assert len(reset["sensors"]) == 5
+        assert len(reset["sensors"]) == 7
 
 
 def test_websocket_sessions_are_isolated() -> None:
@@ -91,11 +91,20 @@ def test_replay_catalog_latest_and_episode_endpoints(tmp_path: Path, monkeypatch
     scoped_catalog = client.get(f"/api/runs/{run_id}/replays")
     scoped_latest = client.get(f"/api/runs/{run_id}/replays/latest")
     scoped_selected = client.get(f"/api/runs/{run_id}/replays/1")
+    trajectories = client.get(f"/api/runs/{run_id}/trajectories")
     assert scoped_catalog.status_code == 200
     assert scoped_catalog.json()["run_id"] == run_id
     assert scoped_latest.json() == latest.json()
     assert scoped_selected.json() == selected.json()
+    assert trajectories.status_code == 200
+    assert trajectories.json()["run_id"] == run_id
+    trajectory = trajectories.json()["trajectories"][0]
+    assert trajectory["training_episode"] == 1
+    assert len(trajectory["states"]) == trajectory["steps"] + 1
+    assert set(trajectory["states"][0]) == {"tick", "x", "y", "heading", "crashed"}
+    assert trajectory["states"][-1]["tick"] == selected.json()["transitions"][-1]["state"]["tick"]
     assert client.get("/api/runs/missing/replays").status_code == 404
+    assert client.get("/api/runs/missing/trajectories").status_code == 404
 
 
 def test_replay_endpoints_distinguish_missing_and_invalid_checkpoints(tmp_path: Path, monkeypatch) -> None:
@@ -109,6 +118,31 @@ def test_replay_endpoints_distinguish_missing_and_invalid_checkpoints(tmp_path: 
     response = client.get("/api/replays")
     assert response.status_code == 503
     assert "invalid" in response.json()["detail"]
+
+
+def test_trajectory_endpoint_rejects_a_run_without_replays(tmp_path: Path, monkeypatch) -> None:
+    agent = QLearningAgent(Random(3))
+    result = run_training(RacingEnv(max_steps=1), agent, 1, evaluate_every=2)
+    checkpoint = checkpoint_from_agent(
+        agent,
+        seed=3,
+        completed_episode=1,
+        evaluate_every=2,
+        evaluation_episodes=1,
+        evaluation_seed=9,
+        training_wall_time=result.training_wall_time,
+        records=result.records,
+        evaluations=(),
+        replays=(),
+    )
+    path = tmp_path / "empty.json"
+    save_checkpoint(checkpoint, path)
+    monkeypatch.setattr(server_module, "CHECKPOINT_PATH", path)
+
+    run_id = client.get("/api/runs").json()["default_run_id"]
+    response = client.get(f"/api/runs/{run_id}/trajectories")
+    assert response.status_code == 404
+    assert "does not contain any replays" in response.json()["detail"]
 
 
 def _write_replay_checkpoint(tmp_path: Path) -> Path:

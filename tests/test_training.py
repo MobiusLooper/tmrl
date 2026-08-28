@@ -10,7 +10,7 @@ from backend.training.agents import RandomAgent
 from backend.training.runner import EpisodeRecord, run_episode, run_episodes, summarize_run
 
 
-OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
 
 
 @dataclass
@@ -18,7 +18,7 @@ class ScriptedAgent:
     action: DiscreteAction = DiscreteAction.COAST
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
-        assert len(observation) == 10
+        assert len(observation) == 12
         return self.action
 
 

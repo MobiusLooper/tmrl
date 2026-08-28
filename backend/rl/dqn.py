@@ -8,6 +8,9 @@ import torch
 from torch import Tensor, nn
 
 from backend.env.environment import DiscreteAction, Observation
+from backend.env.sensors import SENSOR_COUNT
+
+OBSERVATION_SIZE = SENSOR_COUNT + 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +42,7 @@ class QNetwork(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.layers = nn.Sequential(
-            nn.Linear(10, 128),
+            nn.Linear(OBSERVATION_SIZE, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
@@ -144,6 +147,7 @@ class DQNAgent:
 
     def snapshot(self) -> dict[str, object]:
         return {
+            "observation_size": OBSERVATION_SIZE,
             "config": asdict(self.config),
             "online": self.online.state_dict(),
             "target": self.target.state_dict(),
@@ -158,6 +162,12 @@ class DQNAgent:
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, object]) -> DQNAgent:
+        observation_size = snapshot.get("observation_size", 10)
+        if observation_size != OBSERVATION_SIZE:
+            raise ValueError(
+                f"DQN checkpoint uses {observation_size} observation values; "
+                f"the current seven-ray architecture requires {OBSERVATION_SIZE}"
+            )
         config = DQNConfig(**snapshot["config"])  # type: ignore[arg-type]
         agent = cls(Random(), config)
         agent.online.load_state_dict(snapshot["online"])  # type: ignore[arg-type]

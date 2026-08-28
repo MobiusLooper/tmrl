@@ -39,15 +39,17 @@ def test_raycast_handles_range_boundary_and_off_track_origins() -> None:
 def test_sensor_readings_are_normalized_and_keep_angle_order() -> None:
     readings = sensor_readings(rectangular_track(), Point(10, 1), 0)
 
-    assert len(readings) == 5
+    assert len(readings) == 7
     assert all(0 <= reading <= 1 for reading in readings)
     assert readings == pytest.approx(
         (
+            3 / MAX_SENSOR_RANGE,
             2 * sqrt(3) / MAX_SENSOR_RANGE,
             6 / MAX_SENSOR_RANGE,
             1,
             2 / MAX_SENSOR_RANGE,
             2 / sqrt(3) / MAX_SENSOR_RANGE,
+            1 / MAX_SENSOR_RANGE,
         ),
         abs=1e-4,
     )
@@ -60,16 +62,16 @@ def test_heading_rotates_sensor_fan() -> None:
     facing_up = sensor_readings(track, origin, pi / 2)
     facing_down = sensor_readings(track, origin, -pi / 2)
 
-    assert facing_up[2] == pytest.approx(1 / MAX_SENSOR_RANGE, abs=1e-4)
-    assert facing_down[2] == pytest.approx(3 / MAX_SENSOR_RANGE, abs=1e-4)
+    assert facing_up[3] == pytest.approx(1 / MAX_SENSOR_RANGE, abs=1e-4)
+    assert facing_down[3] == pytest.approx(3 / MAX_SENSOR_RANGE, abs=1e-4)
 
 
 def test_raw_observation_adds_normalized_speed() -> None:
     observation = raw_observation(rectangular_track(), Point(10, 0), 0, speed=6, max_speed=12)
 
-    assert len(observation) == 6
-    assert observation[:5] == sensor_readings(rectangular_track(), Point(10, 0), 0)
-    assert observation[5] == 0.5
+    assert len(observation) == 8
+    assert observation[:7] == sensor_readings(rectangular_track(), Point(10, 0), 0)
+    assert observation[7] == 0.5
 
 
 def test_direct_intersections_match_distance_field_reference_on_real_track() -> None:

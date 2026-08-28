@@ -13,7 +13,7 @@ from typing import Sequence
 import torch
 
 from backend.env.environment import RacingEnv
-from backend.rl.dqn import DQNAgent, DQNConfig, DQNPolicy
+from backend.rl.dqn import OBSERVATION_SIZE, DQNAgent, DQNConfig, DQNPolicy
 
 from .curriculum import AdaptiveCurriculum
 from .evaluator import EvaluationRecord, evaluate_policy_with_replay
@@ -49,7 +49,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed = saved_seed
         model_path = _resume_model_path(args.resume, manifest)
         state = torch.load(model_path, map_location="cpu", weights_only=False)
-        agent = DQNAgent.from_snapshot(state["agent"])
+        try:
+            agent = DQNAgent.from_snapshot(state["agent"])
+        except ValueError as error:
+            raise SystemExit(f"incompatible checkpoint {args.resume}: {error}") from error
         curriculum = AdaptiveCurriculum.from_snapshot(state["curriculum"])
         records = list(state["records"])
         evaluations = list(state["evaluations"])
@@ -223,7 +226,12 @@ def _save(
             "created_at": run_metadata.created_at,
             "updated_at": run_metadata.updated_at,
         },
-        "agent": {"config": asdict(agent.config), "epsilon": agent.epsilon, "transitions": agent.transitions},
+        "agent": {
+            "config": asdict(agent.config),
+            "epsilon": agent.epsilon,
+            "transitions": agent.transitions,
+            "observation_size": OBSERVATION_SIZE,
+        },
         "curriculum": {"floor": curriculum.floor},
         "model_file": weights.name,
         "best_model_file": best_weights.name,

@@ -68,7 +68,7 @@ def test_crash_freezes_until_reset() -> None:
     simulation.car.y = 50
     simulation.step(Action())
     assert simulation.crashed
-    assert simulation.snapshot()["sensors"] == [0.0] * 5
+    assert simulation.snapshot()["sensors"] == [0.0] * 7
     frozen = simulation.snapshot()
     simulation.step(Action(throttle=True, left=True))
     assert simulation.snapshot() == frozen
@@ -84,9 +84,9 @@ def test_observation_contains_sensors_and_normalized_speed() -> None:
 
     observation = simulation.observation()
 
-    assert len(observation) == 6
-    assert observation[:5] == tuple(simulation.snapshot()["sensors"])
-    assert observation[5] == 0.5
+    assert len(observation) == 8
+    assert observation[:7] == tuple(simulation.snapshot()["sensors"])
+    assert observation[7] == 0.5
 
 
 def test_finish_requires_halfway_gate_and_forward_direction() -> None:

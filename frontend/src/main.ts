@@ -55,6 +55,13 @@ type ReplayCatalog = {
   latest_training_episode: number;
   replays: ReplayMetadata[];
 };
+type TrajectoryState = Pick<RenderState, "tick" | "x" | "y" | "heading" | "crashed">;
+type Trajectory = ReplayMetadata & { states: TrajectoryState[] };
+type TrajectoryCatalog = {
+  run_id: string;
+  latest_training_episode: number;
+  trajectories: Trajectory[];
+};
 type TrainingRun = {
   run_id: string;
   created_at: string;
@@ -77,7 +84,9 @@ const DT = 0.05;
 const canvas = document.querySelector<HTMLCanvasElement>("#track")!;
 const context = canvas.getContext("2d")!;
 const shell = document.querySelector<HTMLElement>(".shell")!;
+const speedLabel = document.querySelector<HTMLElement>("#speed-label")!;
 const speedElement = document.querySelector<HTMLElement>("#speed")!;
+const speedUnit = document.querySelector<HTMLElement>("#speed-unit")!;
 const lapElement = document.querySelector<HTMLElement>("#lap")!;
 const lapLabel = document.querySelector<HTMLElement>("#lap-label")!;
 const timeElement = document.querySelector<HTMLElement>("#time")!;
@@ -93,6 +102,7 @@ const replayModeButton = document.querySelector<HTMLButtonElement>("#replay-mode
 const replayEmpty = document.querySelector<HTMLElement>("#replay-empty")!;
 const replayEmptyDetail = document.querySelector<HTMLElement>("#replay-empty-detail")!;
 const replaySummary = document.querySelector<HTMLElement>("#replay-summary")!;
+const replaySummaryLabel = document.querySelector<HTMLElement>("#replay-summary-label")!;
 const replayEpisode = document.querySelector<HTMLElement>("#replay-episode")!;
 const replayResult = document.querySelector<HTMLElement>("#replay-result")!;
 const replayControls = document.querySelector<HTMLElement>("#replay-controls")!;
@@ -121,10 +131,11 @@ let catalog: ReplayCatalog | null = null;
 let runCatalog: RunCatalog | null = null;
 let selectedRunId: string | null = null;
 let replay: Replay | null = null;
+let trajectoryCatalog: TrajectoryCatalog | null = null;
+let comparingAll = false;
 let replayIndex = -1;
 let replayPosition = 0;
 let replayPlaying = false;
-let replayPlayAll = false;
 let replayRate = 1;
 let replayLoading = false;
 let lastAnimationTime = performance.now();
@@ -155,10 +166,9 @@ const restartManual = (): void => {
 };
 
 const restartReplay = (): void => {
-  if (!replay) return;
+  if ((!comparingAll && !replay) || (comparingAll && !trajectoryCatalog)) return;
   replayPosition = 0;
   replayPlaying = true;
-  replayPlayAll = false;
   lastAnimationTime = performance.now();
   updateReplayControls();
 };
@@ -243,6 +253,8 @@ const connect = (): void => {
 };
 
 const updateManualHud = (state: ManualSnapshot): void => {
+  speedLabel.textContent = "Speed";
+  speedUnit.textContent = "/ 12";
   lapLabel.textContent = "Lap";
   bestLabel.textContent = "Best";
   speedElement.textContent = state.speed.toFixed(1);
@@ -261,7 +273,8 @@ const updateManualHud = (state: ManualSnapshot): void => {
 
 const updateSensors = (state: RenderState): void => {
   sensorElements.forEach((element) => {
-    const index = Number(element.dataset.sensor);
+    const panelIndex = Number(element.dataset.sensor);
+    const index = state.sensors.length === 5 ? panelIndex - 1 : panelIndex;
     element.textContent = state.sensors[index]?.toFixed(2) ?? "—";
   });
 };
@@ -270,11 +283,11 @@ const setMode = (nextMode: Mode): void => {
   if (nextMode === "replay" && mode === "manual") clearInput();
   mode = nextMode;
   shell.dataset.mode = mode;
+  shell.dataset.review = comparingAll ? "compare" : "single";
   manualModeButton.classList.toggle("active", mode === "manual");
   replayModeButton.classList.toggle("active", mode === "replay");
   if (mode === "manual") {
     replayPlaying = false;
-    replayPlayAll = false;
     if (manualCurrent) updateManualHud(manualCurrent);
   } else {
     crashElement.classList.remove("visible");
@@ -313,6 +326,8 @@ const loadRuns = async (): Promise<void> => {
     selectedRunId = null;
     catalog = null;
     replay = null;
+    trajectoryCatalog = null;
+    comparingAll = false;
     showReplayError(error instanceof Error ? error.message : "Unable to load training runs");
   } finally {
     replayLoading = false;
@@ -323,7 +338,9 @@ const loadRuns = async (): Promise<void> => {
 const loadRunCatalog = async (runId: string): Promise<void> => {
   replayLoading = true;
   replayPlaying = false;
-  replayPlayAll = false;
+  comparingAll = false;
+  trajectoryCatalog = null;
+  shell.dataset.review = "single";
   showReplayError(null);
   updateReplayControls();
   try {
@@ -332,7 +349,10 @@ const loadRunCatalog = async (runId: string): Promise<void> => {
     });
     if (!response.ok) throw new Error(await responseDetail(response));
     catalog = await response.json() as ReplayCatalog;
-    replaySelect.replaceChildren(...catalog.replays.map((item) => {
+    const compareOption = document.createElement("option");
+    compareOption.value = "all";
+    compareOption.textContent = "All checkpoints";
+    replaySelect.replaceChildren(compareOption, ...catalog.replays.map((item) => {
       const option = document.createElement("option");
       option.value = String(item.training_episode);
       option.textContent = `Episode ${item.training_episode}`;
@@ -371,20 +391,24 @@ const loadReplay = async (index: number, keepPlaying: boolean): Promise<void> =>
     );
     if (!response.ok) throw new Error(await responseDetail(response));
     replay = await response.json() as Replay;
+    comparingAll = false;
+    shell.dataset.review = "single";
     replayIndex = index;
     replayPosition = 0;
     replayPlaying = keepPlaying;
     replaySelect.value = String(replay.training_episode);
     replayTimeline.max = String(replay.steps);
     replayTimeline.value = "0";
+    replaySummaryLabel.textContent = "Evaluation checkpoint";
     replayEpisode.textContent = `Episode ${replay.training_episode}`;
     replayResult.textContent = `${(replay.furthest_progress * 100).toFixed(0)}% progress · ${replay.termination_reason} · ${formatTime(replay.simulated_duration)}`;
     showReplayError(null);
     lastAnimationTime = performance.now();
   } catch (error) {
     replay = null;
+    comparingAll = false;
+    shell.dataset.review = "single";
     replayPlaying = false;
-    replayPlayAll = false;
     showReplayError(error instanceof Error ? error.message : "Unable to load replay");
   } finally {
     replayLoading = false;
@@ -407,40 +431,77 @@ const showReplayError = (message: string | null): void => {
 };
 
 const toggleReplay = (): void => {
-  if (!replay) return;
-  if (replayPosition >= replay.steps) replayPosition = 0;
+  const steps = playbackSteps();
+  if (steps === 0) return;
+  if (replayPosition >= steps) replayPosition = 0;
   replayPlaying = !replayPlaying;
-  replayPlayAll = false;
   lastAnimationTime = performance.now();
   updateReplayControls();
 };
 
-const playAllReplays = async (): Promise<void> => {
-  if (!catalog?.replays.length) return;
-  replayPlayAll = true;
-  await loadReplay(0, true);
-  replayPlayAll = true;
-  replayPlaying = true;
+const playbackSteps = (): number => {
+  if (comparingAll) {
+    return Math.max(0, ...(trajectoryCatalog?.trajectories.map((item) => item.steps) ?? []));
+  }
+  return replay?.steps ?? 0;
+};
+
+const showAllTrajectories = async (): Promise<void> => {
+  if (!catalog?.replays.length || !selectedRunId) return;
+  replayLoading = true;
+  replayPlaying = false;
+  showReplayError(null);
   updateReplayControls();
+  try {
+    if (!trajectoryCatalog) {
+      const response = await fetch(
+        `/api/runs/${encodeURIComponent(selectedRunId)}/trajectories`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) throw new Error(await responseDetail(response));
+      trajectoryCatalog = await response.json() as TrajectoryCatalog;
+    }
+    comparingAll = true;
+    shell.dataset.review = "compare";
+    replayPosition = 0;
+    replaySelect.value = "all";
+    replayTimeline.max = String(playbackSteps());
+    replayTimeline.value = "0";
+    const trajectories = trajectoryCatalog.trajectories;
+    replaySummaryLabel.textContent = "Learning run comparison";
+    replayEpisode.textContent = "All checkpoints";
+    replayResult.textContent = `Episodes ${trajectories[0]!.training_episode}–${trajectories.at(-1)!.training_episode} · early blue → latest lime`;
+    lastAnimationTime = performance.now();
+  } catch (error) {
+    comparingAll = false;
+    shell.dataset.review = "single";
+    showReplayError(error instanceof Error ? error.message : "Unable to load trajectories");
+  } finally {
+    replayLoading = false;
+    updateReplayControls();
+  }
 };
 
 const updateReplayControls = (): void => {
-  const available = replay !== null && !replayLoading;
+  const available = (comparingAll ? trajectoryCatalog !== null : replay !== null) && !replayLoading;
   replayPlay.disabled = !available;
   replayRunSelect.disabled = replayLoading || !runCatalog?.runs.length;
   replayAll.disabled = !catalog?.replays.length || replayLoading;
-  replayPrevious.disabled = !available || replayIndex <= 0;
-  replayNext.disabled = !available || !catalog || replayIndex >= catalog.replays.length - 1;
+  replayPrevious.disabled = comparingAll || !available || replayIndex <= 0;
+  replayNext.disabled = comparingAll || !available || !catalog || replayIndex >= catalog.replays.length - 1;
   replayTimeline.disabled = !available;
   replaySelect.disabled = !available;
   replayPlay.textContent = replayPlaying ? "Pause" : "Play";
-  replayAll.classList.toggle("active", replayPlayAll);
+  replayAll.classList.toggle("active", comparingAll);
   replayControls.classList.toggle("loading", replayLoading);
-  replaySummary.classList.toggle("visible", replay !== null);
+  replaySummary.classList.toggle("visible", replay !== null || trajectoryCatalog !== null);
 };
 
 replayPlay.addEventListener("click", toggleReplay);
-replayAll.addEventListener("click", () => void playAllReplays());
+replayAll.addEventListener("click", () => {
+  if (comparingAll) void loadReplay(replayIndex, false);
+  else void showAllTrajectories();
+});
 replayPrevious.addEventListener("click", () => void loadReplay(replayIndex - 1, false));
 replayNext.addEventListener("click", () => void loadReplay(replayIndex + 1, false));
 replayReload.addEventListener("click", () => void loadRuns());
@@ -450,6 +511,10 @@ replayRunSelect.addEventListener("change", () => {
   void loadRunCatalog(selectedRunId);
 });
 replaySelect.addEventListener("change", () => {
+  if (replaySelect.value === "all") {
+    void showAllTrajectories();
+    return;
+  }
   const index = catalog?.replays.findIndex((item) => item.training_episode === Number(replaySelect.value)) ?? -1;
   void loadReplay(index, false);
 });
@@ -459,7 +524,6 @@ replayRateSelect.addEventListener("change", () => {
 });
 replayTimeline.addEventListener("input", () => {
   replayPlaying = false;
-  replayPlayAll = false;
   replayPosition = Number(replayTimeline.value);
   updateReplayControls();
 });
@@ -471,12 +535,7 @@ const replayRenderState = (now: number): RenderState | null => {
   if (replayPlaying) replayPosition += elapsed / DT * replayRate;
   if (replayPosition >= replay.steps) {
     replayPosition = replay.steps;
-    if (replayPlayAll && catalog && replayIndex < catalog.replays.length - 1 && !replayLoading) {
-      void loadReplay(replayIndex + 1, true);
-    } else {
-      replayPlaying = false;
-      replayPlayAll = false;
-    }
+    replayPlaying = false;
     updateReplayControls();
   }
   replayTimeline.value = String(Math.floor(replayPosition));
@@ -497,12 +556,76 @@ const replayStateAt = (frame: number): RenderState => {
 
 const updateReplayHud = (state: RenderState): void => {
   if (!replay) return;
+  speedLabel.textContent = "Speed";
+  speedUnit.textContent = "/ 12";
   lapLabel.textContent = "Progress";
   bestLabel.textContent = "Return";
   speedElement.textContent = state.speed.toFixed(1);
   lapElement.textContent = `${(state.current_progress * 100).toFixed(0)}%`;
   timeElement.textContent = formatTime(replayPosition * DT);
   bestElement.textContent = replay.total_return.toFixed(1);
+};
+
+type PositionedTrajectory = {
+  trajectory: Trajectory;
+  state: TrajectoryState;
+  index: number;
+  finished: boolean;
+};
+
+const comparisonRenderStates = (now: number): PositionedTrajectory[] => {
+  if (!trajectoryCatalog) return [];
+  const elapsed = Math.max(0, now - lastAnimationTime) / 1000;
+  lastAnimationTime = now;
+  const maximum = playbackSteps();
+  if (replayPlaying) replayPosition += elapsed / DT * replayRate;
+  if (replayPosition >= maximum) {
+    replayPosition = maximum;
+    replayPlaying = false;
+    updateReplayControls();
+  }
+  replayTimeline.value = String(Math.floor(replayPosition));
+  const positioned = trajectoryCatalog.trajectories.map((trajectory, index) => {
+    const position = Math.min(replayPosition, trajectory.steps);
+    const lower = Math.floor(position);
+    const upper = Math.min(trajectory.steps, lower + 1);
+    return {
+      trajectory,
+      index,
+      state: interpolateTrajectoryState(
+        trajectory.states[lower]!,
+        trajectory.states[upper]!,
+        position - lower,
+      ),
+      finished: replayPosition >= trajectory.steps,
+    };
+  });
+  updateComparisonHud(positioned);
+  return positioned;
+};
+
+const interpolateTrajectoryState = (
+  from: TrajectoryState,
+  to: TrajectoryState,
+  amount: number,
+): TrajectoryState => ({
+  ...to,
+  x: from.x + (to.x - from.x) * amount,
+  y: from.y + (to.y - from.y) * amount,
+  heading: from.heading + (to.heading - from.heading) * amount,
+});
+
+const updateComparisonHud = (positioned: PositionedTrajectory[]): void => {
+  speedLabel.textContent = "Checkpoints";
+  speedUnit.textContent = "";
+  lapLabel.textContent = "Active";
+  bestLabel.textContent = "Laps";
+  speedElement.textContent = String(positioned.length);
+  lapElement.textContent = String(positioned.filter((item) => !item.finished).length);
+  timeElement.textContent = formatTime(replayPosition * DT);
+  bestElement.textContent = String(
+    positioned.filter((item) => item.finished && item.trajectory.lap_completed).length,
+  );
 };
 
 const interpolateState = (from: RenderState, to: RenderState, amount: number): RenderState => ({
@@ -542,7 +665,10 @@ const drawSensors = (car: RenderState): void => {
   context.lineWidth = 0.065;
   context.strokeStyle = "rgba(186, 244, 60, .72)";
   context.fillStyle = "#dfff9c";
-  for (const [index, relativeDegrees] of track.sensors.angles.entries()) {
+  const angles = car.sensors.length === 5
+    ? [-60, -30, 0, 30, 60]
+    : track.sensors.angles;
+  for (const [index, relativeDegrees] of angles.entries()) {
     const reading = car.sensors[index] ?? 1;
     const distance = reading * track.sensors.max_range;
     const angle = car.heading + relativeDegrees * Math.PI / 180;
@@ -561,19 +687,80 @@ const drawSensors = (car: RenderState): void => {
   context.restore();
 };
 
+const trajectoryColor = (index: number, count: number, alpha = 1): string => {
+  const amount = count <= 1 ? 1 : index / (count - 1);
+  const hue = 205 + (82 - 205) * amount;
+  const lightness = 58 + 8 * amount;
+  return `hsla(${hue}, 82%, ${lightness}%, ${alpha})`;
+};
+
+const drawComparison = (positioned: PositionedTrajectory[]): void => {
+  const count = positioned.length;
+  for (const { trajectory, index } of positioned) {
+    const latest = index === count - 1;
+    context.beginPath();
+    context.moveTo(trajectory.states[0]!.x, trajectory.states[0]!.y);
+    for (const state of trajectory.states.slice(1)) context.lineTo(state.x, state.y);
+    context.strokeStyle = trajectoryColor(index, count, latest ? 0.82 : 0.2 + index / count * 0.22);
+    context.lineWidth = latest ? 0.17 : 0.085;
+    context.stroke();
+  }
+  for (const { state, index, finished } of positioned) {
+    const latest = index === count - 1;
+    drawCar(
+      state,
+      trajectoryColor(index, count),
+      finished ? (latest ? 0.52 : 0.25) : (latest ? 1 : 0.7),
+      latest ? 0.9 : 0.65,
+    );
+  }
+};
+
+const drawCar = (
+  car: Pick<RenderState, "x" | "y" | "heading" | "crashed">,
+  color: string,
+  alpha = 1,
+  size = 1,
+): void => {
+  context.save();
+  context.globalAlpha = alpha;
+  context.translate(car.x, car.y);
+  context.rotate(car.heading);
+  context.scale(size, size);
+  context.fillStyle = car.crashed ? "#ff6258" : color;
+  context.strokeStyle = "#0b0f0c";
+  context.lineWidth = 0.08;
+  context.beginPath();
+  context.roundRect(-0.62, -0.34, 1.24, 0.68, 0.16);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#182019";
+  context.fillRect(0.16, -0.24, 0.26, 0.48);
+  context.fillStyle = "#f3f7ec";
+  context.beginPath();
+  context.moveTo(0.63, 0);
+  context.lineTo(0.44, 0.15);
+  context.lineTo(0.44, -0.15);
+  context.closePath();
+  context.fill();
+  context.restore();
+};
+
 const render = (now: number): void => {
   requestAnimationFrame(render);
   if (!track) return;
   let car: RenderState | null = null;
+  let compared: PositionedTrajectory[] = [];
   if (mode === "replay") {
-    car = replayRenderState(now) ?? manualCurrent;
+    if (comparingAll) compared = comparisonRenderStates(now);
+    else car = replayRenderState(now) ?? manualCurrent;
   } else if (manualCurrent && manualPrevious) {
     const alpha = Math.min(1, Math.max(0, (now - manualCurrent.receivedAt) / (DT * 1000)));
     car = interpolateState(manualPrevious, manualCurrent, alpha);
     lastAnimationTime = now;
   }
-  if (!car) return;
-  updateSensors(car);
+  if (!car && compared.length === 0) return;
+  if (car) updateSensors(car);
 
   const bounds = track.centerline.reduce(
     (acc, [x, y]) => ({ minX: Math.min(acc.minX, x), maxX: Math.max(acc.maxX, x), minY: Math.min(acc.minY, y), maxY: Math.max(acc.maxY, y) }),
@@ -620,27 +807,12 @@ const render = (now: number): void => {
 
   drawGate(track.halfway_gate, "rgba(186,244,60,.24)", true);
   drawGate(track.finish_line, "#edf4e7");
-  drawSensors(car);
-  context.save();
-  context.translate(car.x, car.y);
-  context.rotate(car.heading);
-  context.fillStyle = car.crashed ? "#ff6258" : "#baf43c";
-  context.strokeStyle = "#0b0f0c";
-  context.lineWidth = 0.08;
-  context.beginPath();
-  context.roundRect(-0.62, -0.34, 1.24, 0.68, 0.16);
-  context.fill();
-  context.stroke();
-  context.fillStyle = "#182019";
-  context.fillRect(0.16, -0.24, 0.26, 0.48);
-  context.fillStyle = "#f3f7ec";
-  context.beginPath();
-  context.moveTo(0.63, 0);
-  context.lineTo(0.44, 0.15);
-  context.lineTo(0.44, -0.15);
-  context.closePath();
-  context.fill();
-  context.restore();
+  if (compared.length) {
+    drawComparison(compared);
+  } else if (car) {
+    drawSensors(car);
+    drawCar(car, "#baf43c");
+  }
 };
 
 const boot = async (): Promise<void> => {

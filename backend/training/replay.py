@@ -5,6 +5,7 @@ from math import isfinite
 from typing import Protocol, runtime_checkable
 
 from backend.env.environment import DiscreteAction, Observation, StepResult
+from backend.env.sensors import SENSOR_COUNT
 
 from .runner import EpisodeRecord
 
@@ -37,7 +38,11 @@ class ReplayState:
 
     def __post_init__(self) -> None:
         numeric = (self.x, self.y, self.heading, self.speed, self.current_progress, *self.sensors)
-        if self.tick < 0 or len(self.sensors) != 5 or any(not isfinite(value) for value in numeric):
+        if (
+            self.tick < 0
+            or len(self.sensors) not in {5, SENSOR_COUNT}
+            or any(not isfinite(value) for value in numeric)
+        ):
             raise ValueError("replay states must contain a valid tick and finite physical values")
 
 
@@ -180,8 +185,8 @@ def steering_metrics(replay: EvaluationReplay) -> SteeringMetrics:
 
 def replay_state(snapshot: dict[str, object]) -> ReplayState:
     sensors = snapshot.get("sensors")
-    if not isinstance(sensors, (list, tuple)) or len(sensors) != 5:
-        raise ValueError("render state must contain five sensors")
+    if not isinstance(sensors, (list, tuple)) or len(sensors) not in {5, SENSOR_COUNT}:
+        raise ValueError(f"render state must contain 5 or {SENSOR_COUNT} sensors")
     return ReplayState(
         tick=_integer(snapshot.get("tick"), "tick"),
         x=float(snapshot["x"]),

@@ -5,8 +5,9 @@ from math import cos, inf, pi, sin, sqrt
 from .geometry import Point
 from .track import Track
 
-SENSOR_ANGLES_DEGREES = (-60.0, -30.0, 0.0, 30.0, 60.0)
+SENSOR_ANGLES_DEGREES = (-90.0, -60.0, -30.0, 0.0, 30.0, 60.0, 90.0)
 SENSOR_ANGLES_RADIANS = tuple(angle * pi / 180.0 for angle in SENSOR_ANGLES_DEGREES)
+SENSOR_COUNT = len(SENSOR_ANGLES_DEGREES)
 MAX_SENSOR_RANGE = 12.0
 BOUNDARY_TOLERANCE = 1e-5
 
@@ -63,7 +64,7 @@ def raw_observation(
     speed: float,
     max_speed: float,
 ) -> tuple[float, ...]:
-    """Return five normalized sensors followed by normalized speed."""
+    """Return seven normalized sensors followed by normalized speed."""
     if max_speed <= 0:
         raise ValueError("max_speed must be positive")
     normalized_speed = min(1.0, max(0.0, speed / max_speed))

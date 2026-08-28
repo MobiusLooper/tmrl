@@ -128,10 +128,10 @@ Implemented:
 * total-target resume semantics and graceful episode-boundary interruption
 * best-run trajectory selection at every greedy evaluation checkpoint
 * recorded physical states, sensors, actions, rewards and Q-values
-* replay catalog, latest and per-checkpoint HTTP endpoints
+* replay catalog, latest, per-checkpoint and lightweight all-trajectory HTTP endpoints
 * shared manual/replay Canvas rendering with independent client-side timing
 * pause, restart, scrub, checkpoint navigation and 1×/2×/5×/10× playback
-* chronological Play All mode for watching the learnt policy develop
+* synchronized Compare All mode with early-blue-to-latest-lime trajectory overlays
 * checkpoint, resumption, trajectory-selection and browser API tests
 
 Success criterion:
@@ -144,26 +144,30 @@ Success criterion:
 
 Implemented:
 
-* ten-value continuous observations with progress, lateral offset and heading error
+* twelve-value continuous observations with seven sensor rays, progress, lateral offset and heading error
 * pace- and crossing-speed checkpoint shaping with explicit crash, timeout and stall penalties
 * near-wall-sensitive tabular discretisation and time-calibrated discounting
 * transition-based epsilon decay, promotion reheating, and a seeded adaptive curriculum that expands backwards to canonical starts
 * selectable tabular and locally implemented PyTorch Double DQN learners
 * replay buffer, 10-step returns, target network, best-policy retention and resumable DQN state
 * legacy replay compatibility and schema-2 DQN replay manifests
-* a fresh `tabular-smooth-v3` path with a seven-part, 155,520-state upper bound
-* seven active tabular actions while preserving the shared nine-action enum and replay format
+* a fresh `tabular-local-v5` path with an eight-part, 583,200-state upper bound based on local lateral and heading context rather than absolute progress sectors
+* all nine tabular actions active at normal speed, including simultaneous brake-and-steer control
 * 10 Hz tabular decisions over unchanged 20 Hz physics, with two-frame discounted updates
-* deterministic sticky action selection, previous-action tie-breaking, and zeroed inactive Q-values
+* deterministic sticky action selection for learned rows, safe unseen-state defaults, and low-speed propulsive action constraints
 * 50% canonical curriculum sampling with bounded stage bands and a ten-second tabular stall limit
 * architecture-aware checkpoint rejection for old Q-tables while retaining their browser replays
 * canonical terminal-rate and replay steering-smoothness benchmark metrics
 
-Implementation is complete; the long-running acceptance benchmarks remain:
+Implementation is complete. The DQN benchmark and a fresh Local-v5 acceptance run remain:
 
 > A fresh seed-0 DQN run must produce a greedy canonical lap within 60 simulated seconds and one million training transitions.
 
-> A fresh seed-0 smooth tabular run must exceed the previous 61% canonical best progress within 3,000 episodes, then complete a canonical lap within 60 simulated seconds while averaging no more than two steering-state changes per second in its best replay.
+> A fresh seed-0 Local-v5 run must exceed the previous 61% canonical best progress within 3,000 episodes, then complete a canonical lap within 60 simulated seconds while averaging no more than two steering-state changes per second in its best replay.
+
+The fresh seed-0 Local-v4 run completed all 3,000 episodes with 68 exploratory training laps and zero stalls across 600 greedy evaluations. Its best greedy checkpoint reached 55% with 4.42 steering changes per second and no completed lap, so the liveness objective passed but the progress, lap, and smoothness acceptance criteria remain unmet.
+
+Local-v5 enables simultaneous brake-and-steer actions and requires a fresh acceptance run; Local-v4 checkpoints remain replayable but cannot resume because their active-action semantics differ.
 
 ---
 

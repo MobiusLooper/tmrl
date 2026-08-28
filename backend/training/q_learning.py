@@ -95,9 +95,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.checkpoint is not None:
         checkpoint_path = args.checkpoint
-        run_metadata = new_run_metadata("tabular-smooth", setup.seed)
+        run_metadata = new_run_metadata("tabular-local", setup.seed)
     else:
-        run_metadata, checkpoint_path = create_run("tabular-smooth", setup.seed)
+        run_metadata, checkpoint_path = create_run("tabular-local", setup.seed)
     print(f"run {run_metadata.run_id} | checkpoint {checkpoint_path}")
     stop = _GracefulStop()
     previous_handler = signal.getsignal(signal.SIGINT)
@@ -327,7 +327,7 @@ def _training_setup(args: argparse.Namespace) -> _TrainingSetup:
 
 def _setup_from_checkpoint(checkpoint: TrainingCheckpoint) -> _TrainingSetup:
     if checkpoint.config.architecture != TABULAR_ARCHITECTURE or any(
-        len(state) != 7 for state in checkpoint.q_table
+        len(state) != 8 for state in checkpoint.q_table
     ):
         raise ValueError(
             "this checkpoint uses a previous tabular architecture; it remains replayable, "
@@ -370,7 +370,7 @@ def _positive_int(value: str) -> int:
 def _bucket_count(value: str) -> int:
     parsed = int(value)
     if parsed != 5:
-        raise argparse.ArgumentTypeError("the smooth tabular architecture requires 5")
+        raise argparse.ArgumentTypeError("the local tabular architecture requires 5")
     return parsed
 
 

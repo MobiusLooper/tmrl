@@ -56,7 +56,7 @@ def test_checkpoint_round_trip_restores_complete_agent_and_history(tmp_path: Pat
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert restored == checkpoint
-    assert payload["agent"]["config"]["architecture"] == "tabular-smooth-v3"
+    assert payload["agent"]["config"]["architecture"] == "tabular-local-v5"
     assert payload["agent"]["config"]["action_repeat"] == 2
     assert payload["agent"]["config"]["sticky_tolerance"] == 0.03
     restored_agent = restored.restore_agent()
@@ -230,7 +230,7 @@ def test_checkpoint_rejects_unsupported_schema_and_invalid_q_table(tmp_path: Pat
     with pytest.raises(CheckpointError, match="unsupported"):
         load_checkpoint(path)
 
-    with pytest.raises(ValueError, match="six or nine legacy, or seven smooth"):
+    with pytest.raises(ValueError, match="six or nine legacy.*eight local"):
         QTable.from_snapshot({(0,): (0,) * 9}, bucket_count=5)
     with pytest.raises(ValueError, match="9 finite"):
         QTable.from_snapshot({(0,) * 6: (0,) * 8}, bucket_count=5)
@@ -320,7 +320,81 @@ def test_previous_nine_part_checkpoint_is_replayable_but_cannot_resume(tmp_path:
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["agent"]["config"].pop("architecture")
     for row in payload["agent"]["q_table"]:
-        row["state"].extend([0, 0])
+        row["state"].append(0)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _, algorithm, replays = load_checkpoint_replays(path)
+    assert algorithm == "tabular"
+    assert replays == result.replays
+    parser = build_parser()
+    with pytest.raises(ValueError, match="remains replayable.*fresh run"):
+        _training_setup(parser.parse_args(["--resume", str(path), "--episodes", "2"]))
+
+
+def test_smooth_v3_checkpoint_is_replayable_but_cannot_resume(tmp_path: Path) -> None:
+    agent = QLearningAgent(Random(9))
+    result = run_training(
+        RacingEnv(max_steps=2),
+        agent,
+        1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        record_replays=True,
+    )
+    checkpoint = checkpoint_from_agent(
+        agent,
+        seed=9,
+        completed_episode=1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        evaluation_seed=1_000_009,
+        training_wall_time=result.training_wall_time,
+        records=result.records,
+        evaluations=result.evaluations,
+        replays=result.replays,
+    )
+    path = tmp_path / "smooth-v3.json"
+    save_checkpoint(checkpoint, path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["agent"]["config"]["architecture"] = "tabular-smooth-v3"
+    for row in payload["agent"]["q_table"]:
+        row["state"] = row["state"][:7]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _, algorithm, replays = load_checkpoint_replays(path)
+    assert algorithm == "tabular"
+    assert replays == result.replays
+    parser = build_parser()
+    with pytest.raises(ValueError, match="remains replayable.*fresh run"):
+        _training_setup(parser.parse_args(["--resume", str(path), "--episodes", "2"]))
+
+
+def test_local_v4_checkpoint_is_replayable_but_cannot_resume(tmp_path: Path) -> None:
+    agent = QLearningAgent(Random(10))
+    result = run_training(
+        RacingEnv(max_steps=2),
+        agent,
+        1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        record_replays=True,
+    )
+    checkpoint = checkpoint_from_agent(
+        agent,
+        seed=10,
+        completed_episode=1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        evaluation_seed=1_000_010,
+        training_wall_time=result.training_wall_time,
+        records=result.records,
+        evaluations=result.evaluations,
+        replays=result.replays,
+    )
+    path = tmp_path / "local-v4.json"
+    save_checkpoint(checkpoint, path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["agent"]["config"]["architecture"] = "tabular-local-v4"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     _, algorithm, replays = load_checkpoint_replays(path)

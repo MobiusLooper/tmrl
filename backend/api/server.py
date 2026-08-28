@@ -14,7 +14,7 @@ from backend.env.simulation import Action, DT, RacingSimulation
 from backend.env.sensors import sensor_config
 from backend.env.track import TRACK
 from backend.training.checkpoint import CheckpointError
-from backend.training.replay import EvaluationReplay, steering_metrics
+from backend.training.replay import EvaluationReplay, ReplayState, steering_metrics
 from backend.training.run_catalog import RunCatalog, TrainingRun, discover_runs
 
 app = FastAPI(title="RL Racer")
@@ -66,6 +66,11 @@ async def get_run_latest_replay(run_id: str) -> dict[str, object]:
 @app.get("/api/runs/{run_id}/replays/{training_episode}")
 async def get_run_replay(run_id: str, training_episode: int) -> dict[str, object]:
     return asdict(_find_replay(_get_run(run_id), training_episode))
+
+
+@app.get("/api/runs/{run_id}/trajectories")
+async def get_run_trajectories(run_id: str) -> dict[str, object]:
+    return _trajectory_catalog(_get_run(run_id))
 
 
 @app.websocket("/ws/play")
@@ -176,6 +181,35 @@ def _replay_metadata(replay: EvaluationReplay) -> dict[str, object]:
         "lap_completed": replay.lap_completed,
         "steering_changes_per_second": smoothness.changes_per_second,
         "direct_steering_reversals_per_second": smoothness.direct_reversals_per_second,
+    }
+
+
+def _trajectory_catalog(run: TrainingRun) -> dict[str, object]:
+    if not run.replays:
+        raise HTTPException(status_code=404, detail="the training checkpoint does not contain any replays")
+    return {
+        "run_id": run.run_id,
+        "latest_training_episode": run.replays[-1].training_episode,
+        "trajectories": [
+            {
+                **_replay_metadata(replay),
+                "states": [
+                    _trajectory_state(replay.initial_state),
+                    *(_trajectory_state(transition.state) for transition in replay.transitions),
+                ],
+            }
+            for replay in run.replays
+        ],
+    }
+
+
+def _trajectory_state(state: ReplayState) -> dict[str, object]:
+    return {
+        "tick": state.tick,
+        "x": state.x,
+        "y": state.y,
+        "heading": state.heading,
+        "crashed": state.crashed,
     }
 
 

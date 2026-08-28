@@ -61,6 +61,7 @@ kbd { display: inline-grid; place-items: center; min-width: 27px; height: 27px; 
 
 .replay-controls, .replay-summary, .replay-empty { display: none; }
 [data-mode="replay"] .prompt, [data-mode="replay"] .crash, [data-mode="replay"] .restart, [data-mode="replay"] .controls-hint { display: none; }
+[data-mode="replay"][data-review="compare"] .sensor-panel { display: none; }
 [data-mode="replay"] .replay-controls { position: absolute; right: 18px; bottom: 18px; left: 18px; display: grid; grid-template-columns: minmax(220px, 1.2fr) auto minmax(100px, 1fr) auto auto auto; gap: 9px; align-items: center; padding: 10px; border: 1px solid #344036; border-radius: 12px; background: #151d17e8; box-shadow: 0 12px 34px rgba(0,0,0,.28); backdrop-filter: blur(12px); }
 .replay-controls button, .replay-controls select, .replay-empty button { min-height: 34px; border: 1px solid #3b473d; border-radius: 8px; padding: 0 10px; color: #dce5d8; background: #202a22; font: 600 11px "DM Mono", monospace; cursor: pointer; }
 .replay-controls button:hover, .replay-controls select:hover, .replay-empty button:hover { border-color: #baf43c; color: #baf43c; }

@@ -27,6 +27,9 @@ class QTable:
         row = self._rows.setdefault(state, [0.0] * ACTION_COUNT)
         row[int(action)] = float(value)
 
+    def contains(self, state: DiscreteState) -> bool:
+        return state in self._rows
+
     @property
     def visited_states(self) -> int:
         return len(self._rows)
@@ -47,11 +50,12 @@ class QTable:
         for raw_state, raw_values in snapshot.items():
             state = tuple(raw_state)
             values = tuple(float(value) for value in raw_values)
-            if len(state) not in {6, 7, 9} or any(
+            if len(state) not in {6, 7, 8, 9} or any(
                 not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in state
             ):
                 raise ValueError(
-                    "Q-table states must contain six or nine legacy, or seven smooth bucket indices"
+                    "Q-table states must contain six or nine legacy, seven smooth-v3, "
+                    "or eight local bucket indices"
                 )
             if len(state) == 7 and (
                 any(value > 5 for value in state[:5])
@@ -59,6 +63,13 @@ class QTable:
                 or state[6] > 3
             ):
                 raise ValueError("smooth Q-table state indices are outside the tabular-v3 bounds")
+            if len(state) == 8 and (
+                any(value > 5 for value in state[:5])
+                or state[5] > 4
+                or state[6] > 2
+                or state[7] > 4
+            ):
+                raise ValueError("local Q-table state indices are outside the tabular bounds")
             if len(values) != ACTION_COUNT or any(not isfinite(value) for value in values):
                 raise ValueError(f"Q-table rows must contain {ACTION_COUNT} finite values")
             table._rows[state] = list(values)

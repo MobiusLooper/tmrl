@@ -6,6 +6,7 @@ from math import atan2, pi, sin, cos
 from typing import TypeAlias
 
 from .geometry import Point
+from .sensors import SENSOR_COUNT
 from .simulation import Action, DT, MAX_SPEED, RacingSimulation
 from .track import TRACK, Gate, Track, progress_gates
 
@@ -194,8 +195,8 @@ class RacingEnv:
 
     def _observation(self, snapshot: dict[str, object]) -> Observation:
         sensors = snapshot["sensors"]
-        if not isinstance(sensors, list) or len(sensors) != 5:
-            raise ValueError("simulation snapshot must contain five sensor readings")
+        if not isinstance(sensors, list) or len(sensors) != SENSOR_COUNT:
+            raise ValueError(f"simulation snapshot must contain {SENSOR_COUNT} sensor readings")
         gate = self.track.finish_gate if self.current_checkpoint >= len(self.checkpoints) else self.checkpoints[self.current_checkpoint]
         normal = Point(-gate.tangent.y, gate.tangent.x)
         lateral = max(

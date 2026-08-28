@@ -8,11 +8,11 @@ from backend.rl.dqn import DQNAgent, DQNConfig, DQNPolicy, QNetwork
 from backend.training.curriculum import AdaptiveCurriculum, CurriculumConfig
 
 
-OBSERVATION = (0.2, 0.3, 0.4, 0.3, 0.2, 0.25, 0.1, 0.0, 0.0, 1.0)
+OBSERVATION = (0.1, 0.2, 0.3, 0.4, 0.3, 0.2, 0.1, 0.25, 0.1, 0.0, 0.0, 1.0)
 
 
 def test_q_network_has_one_value_per_action() -> None:
-    assert QNetwork()(torch.zeros((4, 10))).shape == (4, 9)
+    assert QNetwork()(torch.zeros((4, 12))).shape == (4, 9)
 
 
 def test_dqn_n_step_transition_and_terminal_flush() -> None:
@@ -34,6 +34,14 @@ def test_dqn_policy_is_greedy_and_snapshot_restores() -> None:
 
     assert action == DQNPolicy(restored).choose_action(OBSERVATION)
     assert restored.q_values(OBSERVATION) == pytest.approx(agent.q_values(OBSERVATION))
+
+
+def test_legacy_five_ray_snapshot_requires_a_fresh_dqn_run() -> None:
+    snapshot = DQNAgent(Random(2), DQNConfig(warmup_steps=100), seed=2).snapshot()
+    snapshot["observation_size"] = 10
+
+    with pytest.raises(ValueError, match="seven-ray architecture requires 12"):
+        DQNAgent.from_snapshot(snapshot)
 
 
 def test_curriculum_is_seeded_and_promotes_to_canonical() -> None:
@@ -139,6 +147,6 @@ def test_smooth_tabular_default_stall_limit_is_ten_seconds() -> None:
 def test_near_wall_sensor_values_use_different_tabular_states() -> None:
     from backend.rl.discretisation import StateDiscretizer
 
-    safer = (0.064, 0.3, 0.3, 0.3, 0.3, 0.2, 0.45, 0.0, 0.0, 1.0)
-    danger = (0.038, 0.3, 0.3, 0.3, 0.3, 0.2, 0.45, 0.0, 0.0, 1.0)
+    safer = (0.1, 0.064, 0.3, 0.3, 0.3, 0.3, 0.1, 0.2, 0.45, 0.0, 0.0, 1.0)
+    danger = (0.1, 0.038, 0.3, 0.3, 0.3, 0.3, 0.1, 0.2, 0.45, 0.0, 0.0, 1.0)
     assert StateDiscretizer().discretize(safer) != StateDiscretizer().discretize(danger)
