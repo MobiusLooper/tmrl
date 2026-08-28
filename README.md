@@ -4,7 +4,7 @@ A browser-based reinforcement-learning racing demo, built from scratch to make t
 
 ## Current status
 
-Milestones 1 through 4 are complete. The project currently includes:
+Milestones 1 through 5 are complete. The project currently includes:
 
 * a playable go-kart circuit with a chicane, hairpin and straights
 * deterministic Python car physics and track collision detection
@@ -17,9 +17,24 @@ Milestones 1 through 4 are complete. The project currently includes:
 * a deterministic `reset()` / `step()` environment with nine discrete actions
 * ordered lap-progress checkpoints, configurable rewards and terminal outcomes
 * a reusable headless episode runner and seeded random-policy baseline
+* tabular Q-learning with configurable state discretisation and epsilon decay
+* deterministic greedy evaluation isolated from the training random stream
+* a headless training command with periodic learning metrics and JSON results
 * automated tests for physics, geometry, sensors, environment, training and the browser-facing API
 
-Milestone 5, tabular Q-learning, is next. There is not yet a trained agent: the current agent chooses every action randomly and retains no knowledge between episodes. Evaluation playback and the training dashboard follow in later milestones.
+The seed-0 Q-learning validation reached 45% mean greedy-evaluation progress at episode 350, with a best checkpoint of 61%, compared with 2.609% mean progress for the 1,000-episode random baseline. Evaluation playback and the training dashboard follow in later milestones.
+
+Evaluation progress during that run:
+
+| Training episode | Epsilon | Mean progress | Best progress |
+| ---: | ---: | ---: | ---: |
+| 50 | 0.782 | 0% | 0% |
+| 100 | 0.609 | 8% | 8% |
+| 150 | 0.474 | 20% | 20% |
+| 200 | 0.369 | 60.5% | 61% |
+| 250 | 0.287 | 46.3% | 53% |
+| 300 | 0.223 | 45% | 45% |
+| 350 | 0.174 | 45% | 45% |
 
 See [plan.md](plan.md) for the product and technical design, and [implementation-plan.md](implementation-plan.md) for the milestone roadmap.
 
@@ -58,6 +73,24 @@ uv run python -m backend.training.random_baseline --episodes 1000 --seed 0 --rep
 ```
 
 The command reports progress and finishes with aggregate reward, lap progress, terminal outcomes and throughput metrics. It does not retain frame-by-frame trajectories; browser playback of recorded evaluation runs is planned for Milestone 6.
+
+## Q-learning
+
+Train the tabular Q-learning agent and run a ten-episode greedy evaluation every 50 episodes:
+
+```bash
+uv run python -m backend.training.q_learning --episodes 1000 --seed 0 --evaluate-every 50 --evaluation-episodes 10 --report-every 50
+```
+
+The command reports training throughput, epsilon and evaluation progress, then prints the configuration, aggregate training summary, Q-table size and evaluation history as JSON when it finishes normally. Training and evaluation use separate seeded random streams, so changing evaluation frequency does not alter learning.
+
+Current limitations:
+
+* Metrics are printed to the terminal and the final JSON is not persisted automatically. Interrupting a run before completion loses its full metric history.
+* The Q-table is memory-only. Interrupted training cannot yet resume from a checkpoint, although rerunning the same command and seed reproduces it deterministically.
+* Evaluations currently retain aggregate metrics only. They do not record frame-by-frame trajectories, so learned policies cannot yet be played back in the browser.
+
+Milestone 6 will add checkpoint persistence and resumption alongside recorded evaluation trajectories and browser playback.
 
 ## Production build
 

@@ -87,33 +87,55 @@ These episodes do not train an agent or retain trajectories. Learning begins in 
 
 ---
 
-## Milestone 5 — Q-learning
+## Milestone 5 — Q-learning ✅
 
-Implement:
+Implemented:
 
-* state discretisation
-* Q-table
-* Q-learning update
-* epsilon-greedy exploration
-* epsilon decay
+* six-value observation discretisation with configurable uniform buckets
+* sparse nine-action Q-table
+* terminal-aware Q-learning updates implemented without an RL library
+* seeded epsilon-greedy exploration with episode-based decay
+* independently seeded greedy evaluation that cannot mutate training
+* reusable training and evaluation runners
+* headless training command with periodic metrics and JSON results
+* focused algorithm, determinism and real-environment integration tests
 
-Success criterion:
+Seed `0`, 350-episode validation checkpoint:
 
-> Evaluation performance becomes measurably better than random behaviour.
+```text
+training steps              276,666
+training steps/second       217.5
+epsilon                     0.1739
+latest evaluation progress  45%
+best evaluation progress    61%
+random mean progress        2.609%
+```
+
+Each evaluation used ten epsilon-zero episodes. The planned 1,000-episode run was stopped at episode 350 after the learned policy had already exceeded the random reference from episode 100 onward.
+
+Success criterion met:
+
+> Greedy evaluation performance is reproducibly and measurably better than random behaviour.
 
 ---
 
 ## Milestone 6 — Evaluation playback
 
-Record selected evaluation trajectories from the current policy.
+Next milestone.
 
-Send them to the frontend.
+Persist training checkpoints containing the Q-table, configuration, episode number and metric history.
 
-Animate them on Canvas.
+Allow interrupted headless training runs to resume from those checkpoints.
+
+Record selected greedy evaluation trajectories with position, heading, speed, sensors, action, reward and Q-values for every frame.
+
+Expose the latest recorded trajectory and its evaluation metadata to the frontend.
+
+Animate trajectories on Canvas independently of ongoing training.
 
 Success criterion:
 
-> We can watch how the current learnt policy drives.
+> We can resume an interrupted run and watch how its current learnt policy drives.
 
 ---
 
