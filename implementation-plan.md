@@ -151,10 +151,19 @@ Implemented:
 * selectable tabular and locally implemented PyTorch Double DQN learners
 * replay buffer, 10-step returns, target network, best-policy retention and resumable DQN state
 * legacy replay compatibility and schema-2 DQN replay manifests
+* a fresh `tabular-smooth-v3` path with a seven-part, 155,520-state upper bound
+* seven active tabular actions while preserving the shared nine-action enum and replay format
+* 10 Hz tabular decisions over unchanged 20 Hz physics, with two-frame discounted updates
+* deterministic sticky action selection, previous-action tie-breaking, and zeroed inactive Q-values
+* 50% canonical curriculum sampling with bounded stage bands and a ten-second tabular stall limit
+* architecture-aware checkpoint rejection for old Q-tables while retaining their browser replays
+* canonical terminal-rate and replay steering-smoothness benchmark metrics
 
-Implementation is complete; the long-running acceptance benchmark remains:
+Implementation is complete; the long-running acceptance benchmarks remain:
 
 > A fresh seed-0 DQN run must produce a greedy canonical lap within 60 simulated seconds and one million training transitions.
+
+> A fresh seed-0 smooth tabular run must exceed the previous 61% canonical best progress within 3,000 episodes, then complete a canonical lap within 60 simulated seconds while averaging no more than two steering-state changes per second in its best replay.
 
 ---
 

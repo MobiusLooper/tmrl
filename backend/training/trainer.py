@@ -42,8 +42,22 @@ def run_training_episode(
         observation = environment.reset()
     while True:
         action = agent.choose_action(observation)
-        result = environment.step(action)
-        agent.update(observation, action, result.reward, result.observation, result.done)
+        discounted_reward = 0.0
+        duration = 0
+        for tick in range(agent.config.action_repeat):
+            result = environment.step(action)
+            discounted_reward += agent.config.discount**tick * result.reward
+            duration += 1
+            if result.done:
+                break
+        agent.update(
+            observation,
+            action,
+            discounted_reward,
+            result.observation,
+            result.done,
+            duration=duration,
+        )
         observation = result.observation
         if result.done:
             record = _record_terminal_episode(result.info, episode)
@@ -109,6 +123,7 @@ def run_training(
                 policy,
                 evaluation_episodes,
                 training_episode=episode,
+                action_repeat=agent.config.action_repeat,
             )
             replays.append(replay)
             if on_replay is not None:
@@ -119,6 +134,7 @@ def run_training(
                 policy,
                 evaluation_episodes,
                 training_episode=episode,
+                action_repeat=agent.config.action_repeat,
             )
         evaluations.append(evaluation)
         if on_evaluation is not None:

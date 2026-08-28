@@ -16,6 +16,9 @@ class EvaluationRecord:
     mean_progress: float
     best_progress: float
     lap_completions: int
+    crash_count: int = 0
+    stalled_count: int = 0
+    timeout_count: int = 0
 
 
 def evaluate_policy(
@@ -24,8 +27,9 @@ def evaluate_policy(
     episodes: int,
     *,
     training_episode: int,
+    action_repeat: int = 1,
 ) -> EvaluationRecord:
-    records, _ = run_episodes(environment, policy, episodes)
+    records, _ = run_episodes(environment, policy, episodes, action_repeat=action_repeat)
     return EvaluationRecord(
         training_episode=training_episode,
         episodes=episodes,
@@ -33,6 +37,9 @@ def evaluate_policy(
         mean_progress=fmean(record.furthest_progress for record in records),
         best_progress=max(record.furthest_progress for record in records),
         lap_completions=sum(record.lap_completed for record in records),
+        crash_count=sum(record.termination_reason == "crash" for record in records),
+        stalled_count=sum(record.termination_reason == "stalled" for record in records),
+        timeout_count=sum(record.termination_reason == "timeout" for record in records),
     )
 
 
@@ -42,6 +49,7 @@ def evaluate_policy_with_replay(
     episodes: int,
     *,
     training_episode: int,
+    action_repeat: int = 1,
 ) -> tuple[EvaluationRecord, EvaluationReplay]:
     if episodes < 1:
         raise ValueError("episodes must be positive")
@@ -53,6 +61,7 @@ def evaluate_policy_with_replay(
             policy,
             training_episode=training_episode,
             evaluation_episode=evaluation_episode,
+            action_repeat=action_repeat,
         )
         records.append(record)
         replays.append(replay)
@@ -63,5 +72,8 @@ def evaluate_policy_with_replay(
         mean_progress=fmean(record.furthest_progress for record in records),
         best_progress=max(record.furthest_progress for record in records),
         lap_completions=sum(record.lap_completed for record in records),
+        crash_count=sum(record.termination_reason == "crash" for record in records),
+        stalled_count=sum(record.termination_reason == "stalled" for record in records),
+        timeout_count=sum(record.termination_reason == "timeout" for record in records),
     )
     return evaluation, select_best_replay(replays)

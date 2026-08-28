@@ -13,14 +13,15 @@ from fastapi.staticfiles import StaticFiles
 from backend.env.simulation import Action, DT, RacingSimulation
 from backend.env.sensors import sensor_config
 from backend.env.track import TRACK
-from backend.training.checkpoint import DEFAULT_CHECKPOINT_PATH, CheckpointError, load_checkpoint_replays
-from backend.training.replay import EvaluationReplay
+from backend.training.checkpoint import CheckpointError
+from backend.training.replay import EvaluationReplay, steering_metrics
+from backend.training.run_catalog import RunCatalog, TrainingRun, discover_runs
 
 app = FastAPI(title="RL Racer")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CHECKPOINT_PATH = Path(
-    os.environ.get("RL_RACER_CHECKPOINT", str(PROJECT_ROOT / DEFAULT_CHECKPOINT_PATH))
-).expanduser()
+ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+_configured_checkpoint = os.environ.get("RL_RACER_CHECKPOINT")
+CHECKPOINT_PATH = Path(_configured_checkpoint).expanduser() if _configured_checkpoint else None
 
 
 @app.get("/api/track")
@@ -30,26 +31,41 @@ async def get_track() -> dict[str, object]:
 
 @app.get("/api/replays")
 async def get_replays() -> dict[str, object]:
-    schema_version, algorithm, replays = _load_replays()
-    return {
-        "schema_version": schema_version,
-        "algorithm": algorithm,
-        "latest_training_episode": replays[-1].training_episode,
-        "replays": [_replay_metadata(replay) for replay in replays],
-    }
+    return _replay_catalog(_default_run())
 
 
 @app.get("/api/replays/latest")
 async def get_latest_replay() -> dict[str, object]:
-    return asdict(_load_replays()[2][-1])
+    return asdict(_latest_replay(_default_run()))
 
 
 @app.get("/api/replays/{training_episode}")
 async def get_replay(training_episode: int) -> dict[str, object]:
-    for replay in _load_replays()[2]:
-        if replay.training_episode == training_episode:
-            return asdict(replay)
-    raise HTTPException(status_code=404, detail=f"no replay exists for training episode {training_episode}")
+    return asdict(_find_replay(_default_run(), training_episode))
+
+
+@app.get("/api/runs")
+async def get_runs() -> dict[str, object]:
+    catalog = _run_catalog()
+    return {
+        "default_run_id": catalog.default_run_id,
+        "runs": [run.as_dict() for run in catalog.runs],
+    }
+
+
+@app.get("/api/runs/{run_id}/replays")
+async def get_run_replays(run_id: str) -> dict[str, object]:
+    return _replay_catalog(_get_run(run_id))
+
+
+@app.get("/api/runs/{run_id}/replays/latest")
+async def get_run_latest_replay(run_id: str) -> dict[str, object]:
+    return asdict(_latest_replay(_get_run(run_id)))
+
+
+@app.get("/api/runs/{run_id}/replays/{training_episode}")
+async def get_run_replay(run_id: str, training_episode: int) -> dict[str, object]:
+    return asdict(_find_replay(_get_run(run_id), training_episode))
 
 
 @app.websocket("/ws/play")
@@ -96,19 +112,59 @@ async def play(websocket: WebSocket) -> None:
         pass
 
 
-def _load_replays() -> tuple[int, str, tuple[EvaluationReplay, ...]]:
-    if not CHECKPOINT_PATH.is_file():
-        raise HTTPException(status_code=404, detail="no training checkpoint is available yet")
+def _run_catalog() -> RunCatalog:
     try:
-        schema_version, algorithm, replays = load_checkpoint_replays(CHECKPOINT_PATH)
+        return discover_runs(ARTIFACTS_DIR, configured_checkpoint=CHECKPOINT_PATH)
+    except FileNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=f"configured training checkpoint does not exist: {error}",
+        ) from error
     except CheckpointError as error:
         raise HTTPException(status_code=503, detail=f"training checkpoint is invalid: {error}") from error
-    if not replays:
+
+
+def _default_run() -> TrainingRun:
+    run = _run_catalog().default
+    if run is None:
+        raise HTTPException(status_code=404, detail="no training checkpoint is available yet")
+    return run
+
+
+def _get_run(run_id: str) -> TrainingRun:
+    run = _run_catalog().find(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"no training run exists with ID {run_id}")
+    return run
+
+
+def _replay_catalog(run: TrainingRun) -> dict[str, object]:
+    if not run.replays:
         raise HTTPException(status_code=404, detail="the training checkpoint does not contain any replays")
-    return schema_version, algorithm, replays
+    return {
+        "run_id": run.run_id,
+        "schema_version": run.schema_version,
+        "algorithm": run.algorithm,
+        "latest_training_episode": run.replays[-1].training_episode,
+        "replays": [_replay_metadata(replay) for replay in run.replays],
+    }
+
+
+def _latest_replay(run: TrainingRun) -> EvaluationReplay:
+    if not run.replays:
+        raise HTTPException(status_code=404, detail="the training checkpoint does not contain any replays")
+    return run.replays[-1]
+
+
+def _find_replay(run: TrainingRun, training_episode: int) -> EvaluationReplay:
+    for replay in run.replays:
+        if replay.training_episode == training_episode:
+            return replay
+    raise HTTPException(status_code=404, detail=f"no replay exists for training episode {training_episode}")
 
 
 def _replay_metadata(replay: EvaluationReplay) -> dict[str, object]:
+    smoothness = steering_metrics(replay)
     return {
         "training_episode": replay.training_episode,
         "evaluation_episode": replay.evaluation_episode,
@@ -118,6 +174,8 @@ def _replay_metadata(replay: EvaluationReplay) -> dict[str, object]:
         "steps": replay.steps,
         "termination_reason": replay.termination_reason,
         "lap_completed": replay.lap_completed,
+        "steering_changes_per_second": smoothness.changes_per_second,
+        "direct_steering_reversals_per_second": smoothness.direct_reversals_per_second,
     }
 
 

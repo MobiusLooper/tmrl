@@ -8,19 +8,38 @@ from backend.env.environment import DiscreteAction, Observation
 from .discretisation import StateDiscretizer
 from .q_table import QTable
 
-ACTIONS = tuple(DiscreteAction)
+TABULAR_ARCHITECTURE = "tabular-smooth-v3"
+LEGACY_TABULAR_ARCHITECTURE = "tabular-legacy"
+TABULAR_ACTIONS = (
+    DiscreteAction.COAST,
+    DiscreteAction.THROTTLE,
+    DiscreteAction.BRAKE,
+    DiscreteAction.LEFT,
+    DiscreteAction.LEFT_THROTTLE,
+    DiscreteAction.RIGHT,
+    DiscreteAction.RIGHT_THROTTLE,
+)
+INACTIVE_TABULAR_ACTIONS = (
+    DiscreteAction.LEFT_BRAKE,
+    DiscreteAction.RIGHT_BRAKE,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class QLearningConfig:
+    architecture: str = TABULAR_ARCHITECTURE
     learning_rate: float = 0.1
     discount: float = 0.9995
     epsilon_start: float = 1.0
     epsilon_min: float = 0.10
     epsilon_decay: float = 0.997
-    epsilon_decay_steps: int = 400_000
+    epsilon_decay_steps: int = 200_000
     epsilon_reheat: float = 0.30
     bucket_count: int = 5
+    action_repeat: int = 2
+    sticky_tolerance: float = 0.03
+    canonical_start_probability: float = 0.50
+    tabular_stall_seconds: float = 10.0
 
     def __post_init__(self) -> None:
         if not 0 < self.learning_rate <= 1:
@@ -35,8 +54,20 @@ class QLearningConfig:
             raise ValueError("epsilon_decay_steps must be positive")
         if not 0 <= self.epsilon_reheat <= 1:
             raise ValueError("epsilon_reheat must be in [0, 1]")
-        if self.bucket_count < 2:
+        if not self.architecture:
+            raise ValueError("architecture must not be empty")
+        if self.architecture == TABULAR_ARCHITECTURE and self.bucket_count != 5:
+            raise ValueError("the smooth tabular architecture requires five sensor thresholds")
+        if self.architecture != TABULAR_ARCHITECTURE and self.bucket_count < 2:
             raise ValueError("bucket_count must be at least 2")
+        if self.action_repeat < 1:
+            raise ValueError("action_repeat must be positive")
+        if self.sticky_tolerance < 0:
+            raise ValueError("sticky_tolerance must be non-negative")
+        if not 0 <= self.canonical_start_probability <= 1:
+            raise ValueError("canonical_start_probability must be in [0, 1]")
+        if self.tabular_stall_seconds <= 0:
+            raise ValueError("tabular_stall_seconds must be positive")
 
 
 class QLearningAgent:
@@ -55,15 +86,24 @@ class QLearningAgent:
         self.training_steps = 0
         self.epsilon_schedule_start_step = 0
         self.epsilon_schedule_start_value = config.epsilon_start
+        self.previous_action: DiscreteAction | None = None
 
-    def start_episode(self, episode: int) -> None:
-        if episode < 1:
+    def start_episode(self, episode: int | None = None) -> None:
+        if episode is not None and episode < 1:
             raise ValueError("episode must be positive")
+        self.previous_action = None
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
         if self.rng.random() < self.epsilon:
-            return self.rng.choice(ACTIONS)
-        return _choose_max_action(self.q_values(observation), self.rng)
+            action = self.rng.choice(TABULAR_ACTIONS)
+        else:
+            action = _choose_tabular_action(
+                self.q_values(observation),
+                self.previous_action,
+                self.config.sticky_tolerance,
+            )
+        self.previous_action = action
+        return action
 
     def update(
         self,
@@ -72,13 +112,20 @@ class QLearningAgent:
         reward: float,
         next_observation: Observation,
         done: bool,
+        *,
+        duration: int = 1,
     ) -> None:
         if not isinstance(action, DiscreteAction):
             raise TypeError("action must be a DiscreteAction")
+        if action not in TABULAR_ACTIONS:
+            raise ValueError("action is not active in the smooth tabular architecture")
+        if duration < 1:
+            raise ValueError("duration must be positive")
         state = self.discretizer.discretize(observation)
         current = self.q_table.value(state, action)
-        future = 0.0 if done else max(self.q_values(next_observation))
-        target = float(reward) + self.config.discount * future
+        next_values = self.q_values(next_observation)
+        future = 0.0 if done else max(next_values[int(action)] for action in TABULAR_ACTIONS)
+        target = float(reward) + self.config.discount**duration * future
         updated = current + self.config.learning_rate * (target - current)
         self.q_table.set_value(state, action, updated)
         self.training_steps += 1
@@ -118,7 +165,10 @@ class QLearningAgent:
         )
 
     def q_values(self, observation: Observation) -> tuple[float, ...]:
-        return self.q_table.values(self.discretizer.discretize(observation))
+        values = list(self.q_table.values(self.discretizer.discretize(observation)))
+        for action in INACTIVE_TABULAR_ACTIONS:
+            values[int(action)] = 0.0
+        return tuple(values)
 
     @property
     def visited_states(self) -> int:
@@ -128,16 +178,43 @@ class QLearningAgent:
 @dataclass(slots=True)
 class GreedyPolicy:
     agent: QLearningAgent
-    rng: Random
+    rng: Random | None = None
+    previous_action: DiscreteAction | None = None
+
+    def start_episode(self) -> None:
+        self.previous_action = None
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
-        return _choose_max_action(self.agent.q_values(observation), self.rng)
+        action = _choose_tabular_action(
+            self.agent.q_values(observation),
+            self.previous_action,
+            self.agent.config.sticky_tolerance,
+        )
+        self.previous_action = action
+        return action
 
     def q_values(self, observation: Observation) -> tuple[float, ...]:
         return self.agent.q_values(observation)
 
 
-def _choose_max_action(values: tuple[float, ...], rng: Random) -> DiscreteAction:
-    best_value = max(values)
-    candidates = [action for action in ACTIONS if values[int(action)] == best_value]
-    return rng.choice(candidates)
+def _choose_tabular_action(
+    values: tuple[float, ...],
+    previous_action: DiscreteAction | None,
+    sticky_tolerance: float,
+) -> DiscreteAction:
+    if len(values) != len(DiscreteAction):
+        raise ValueError("tabular action selection requires nine Q-values")
+    best_value = max(values[int(action)] for action in TABULAR_ACTIONS)
+    if (
+        previous_action in TABULAR_ACTIONS
+        and values[int(previous_action)] >= best_value - sticky_tolerance
+    ):
+        return previous_action
+    candidates = [
+        action for action in TABULAR_ACTIONS if values[int(action)] == best_value
+    ]
+    if previous_action in candidates:
+        return previous_action
+    if DiscreteAction.COAST in candidates:
+        return DiscreteAction.COAST
+    return candidates[0]

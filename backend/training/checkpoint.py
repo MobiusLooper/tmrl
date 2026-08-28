@@ -9,12 +9,13 @@ from random import Random
 from tempfile import NamedTemporaryFile
 from typing import Any, Mapping
 
-from backend.rl.agent import QLearningAgent, QLearningConfig
+from backend.rl.agent import LEGACY_TABULAR_ARCHITECTURE, QLearningAgent, QLearningConfig
 from backend.rl.discretisation import DiscreteState
 from backend.rl.q_table import QTable
 
 from .evaluator import EvaluationRecord
 from .replay import EvaluationReplay, ReplayState, ReplayTransition
+from .run_storage import RunMetadata
 from .runner import EpisodeRecord
 
 SCHEMA_VERSION = 1
@@ -44,6 +45,9 @@ class TrainingCheckpoint:
     training_steps: int = 0
     epsilon_schedule_start_step: int = 0
     epsilon_schedule_start_value: float | None = None
+    run_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
     def __post_init__(self) -> None:
         if self.completed_episode < 1:
@@ -78,7 +82,15 @@ class TrainingCheckpoint:
         if evaluation_numbers and evaluation_numbers[-1] > self.completed_episode:
             raise CheckpointError("evaluation history cannot exceed the completed episode")
         for record in self.evaluations:
-            if record.episodes < 1 or record.lap_completions < 0:
+            if record.episodes < 1 or any(
+                count < 0
+                for count in (
+                    record.lap_completions,
+                    record.crash_count,
+                    record.stalled_count,
+                    record.timeout_count,
+                )
+            ):
                 raise CheckpointError("evaluation history contains invalid counts")
             if any(
                 not isfinite(value)
@@ -117,6 +129,7 @@ def checkpoint_from_agent(
     evaluations: tuple[EvaluationRecord, ...],
     replays: tuple[EvaluationReplay, ...],
     curriculum: dict[str, object] | None = None,
+    run_metadata: RunMetadata | None = None,
 ) -> TrainingCheckpoint:
     return TrainingCheckpoint(
         seed=seed,
@@ -136,6 +149,9 @@ def checkpoint_from_agent(
         training_steps=agent.training_steps,
         epsilon_schedule_start_step=agent.epsilon_schedule_start_step,
         epsilon_schedule_start_value=agent.epsilon_schedule_start_value,
+        run_id=None if run_metadata is None else run_metadata.run_id,
+        created_at=None if run_metadata is None else run_metadata.created_at,
+        updated_at=None if run_metadata is None else run_metadata.updated_at,
     )
 
 
@@ -202,17 +218,24 @@ def load_checkpoint_replays(path: str | Path) -> tuple[int, str, tuple[Evaluatio
 
 
 def _checkpoint_payload(checkpoint: TrainingCheckpoint) -> dict[str, object]:
+    run: dict[str, object] = {
+        "seed": checkpoint.seed,
+        "completed_episode": checkpoint.completed_episode,
+        "evaluate_every": checkpoint.evaluate_every,
+        "evaluation_episodes": checkpoint.evaluation_episodes,
+        "evaluation_seed": checkpoint.evaluation_seed,
+        "training_wall_time": checkpoint.training_wall_time,
+        "curriculum": checkpoint.curriculum,
+    }
+    if checkpoint.run_id is not None:
+        run.update(
+            run_id=checkpoint.run_id,
+            created_at=checkpoint.created_at,
+            updated_at=checkpoint.updated_at,
+        )
     return {
         "schema_version": SCHEMA_VERSION,
-        "run": {
-            "seed": checkpoint.seed,
-            "completed_episode": checkpoint.completed_episode,
-            "evaluate_every": checkpoint.evaluate_every,
-            "evaluation_episodes": checkpoint.evaluation_episodes,
-            "evaluation_seed": checkpoint.evaluation_seed,
-            "training_wall_time": checkpoint.training_wall_time,
-            "curriculum": checkpoint.curriculum,
-        },
+        "run": run,
         "agent": {
             "config": asdict(checkpoint.config),
             "epsilon": checkpoint.epsilon,
@@ -240,7 +263,10 @@ def _checkpoint_from_payload(payload: Mapping[str, Any]) -> TrainingCheckpoint:
     run = _mapping(payload["run"], "run")
     agent = _mapping(payload["agent"], "agent")
     history = _mapping(payload["history"], "history")
-    config = QLearningConfig(**dict(_mapping(agent["config"], "agent.config")))
+    config_values = dict(_mapping(agent["config"], "agent.config"))
+    if "architecture" not in config_values:
+        config_values["architecture"] = LEGACY_TABULAR_ARCHITECTURE
+    config = QLearningConfig(**config_values)
     q_table: dict[DiscreteState, tuple[float, ...]] = {}
     for item in _list(agent["q_table"], "agent.q_table"):
         row = _mapping(item, "Q-table row")
@@ -275,6 +301,9 @@ def _checkpoint_from_payload(payload: Mapping[str, Any]) -> TrainingCheckpoint:
         epsilon_schedule_start_value=float(
             agent.get("epsilon_schedule_start_value", config.epsilon_start)
         ),
+        run_id=None if run.get("run_id") is None else str(run["run_id"]),
+        created_at=None if run.get("created_at") is None else str(run["created_at"]),
+        updated_at=None if run.get("updated_at") is None else str(run["updated_at"]),
     )
 
 
@@ -310,6 +339,9 @@ def _evaluation_record(value: object) -> EvaluationRecord:
         mean_progress=float(item["mean_progress"]),
         best_progress=float(item["best_progress"]),
         lap_completions=_integer(item["lap_completions"], "lap_completions"),
+        crash_count=_integer(item.get("crash_count", 0), "crash_count"),
+        stalled_count=_integer(item.get("stalled_count", 0), "stalled_count"),
+        timeout_count=_integer(item.get("timeout_count", 0), "timeout_count"),
     )
 
 

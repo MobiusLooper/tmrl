@@ -81,6 +81,22 @@ def test_replay_catalog_latest_and_episode_endpoints(tmp_path: Path, monkeypatch
     assert len(latest.json()["transitions"][0]["q_values"]) == 9
     assert client.get("/api/replays/999").status_code == 404
 
+    runs = client.get("/api/runs")
+    assert runs.status_code == 200
+    run_id = runs.json()["default_run_id"]
+    selected_run = next(run for run in runs.json()["runs"] if run["run_id"] == run_id)
+    assert selected_run["algorithm"] == "tabular"
+    assert selected_run["evaluation_count"] == 1
+
+    scoped_catalog = client.get(f"/api/runs/{run_id}/replays")
+    scoped_latest = client.get(f"/api/runs/{run_id}/replays/latest")
+    scoped_selected = client.get(f"/api/runs/{run_id}/replays/1")
+    assert scoped_catalog.status_code == 200
+    assert scoped_catalog.json()["run_id"] == run_id
+    assert scoped_latest.json() == latest.json()
+    assert scoped_selected.json() == selected.json()
+    assert client.get("/api/runs/missing/replays").status_code == 404
+
 
 def test_replay_endpoints_distinguish_missing_and_invalid_checkpoints(tmp_path: Path, monkeypatch) -> None:
     missing = tmp_path / "missing.json"

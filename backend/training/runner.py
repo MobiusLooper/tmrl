@@ -47,11 +47,26 @@ class RunSummary:
 ProgressCallback = Callable[[EpisodeRecord, int, float], None]
 
 
-def run_episode(environment: Environment, agent: Agent, episode: int) -> EpisodeRecord:
+def run_episode(
+    environment: Environment,
+    agent: Agent,
+    episode: int,
+    *,
+    action_repeat: int = 1,
+) -> EpisodeRecord:
+    if action_repeat < 1:
+        raise ValueError("action_repeat must be positive")
+    start_episode = getattr(agent, "start_episode", None)
+    if callable(start_episode):
+        start_episode()
     observation = environment.reset()
     while True:
-        result = environment.step(agent.choose_action(observation))
-        observation = result.observation
+        action = agent.choose_action(observation)
+        for _ in range(action_repeat):
+            result = environment.step(action)
+            observation = result.observation
+            if result.done:
+                break
         if not result.done:
             continue
 
@@ -77,6 +92,7 @@ def run_episodes(
     episodes: int,
     *,
     on_episode: ProgressCallback | None = None,
+    action_repeat: int = 1,
 ) -> tuple[list[EpisodeRecord], float]:
     if episodes < 1:
         raise ValueError("episodes must be positive")
@@ -85,7 +101,7 @@ def run_episodes(
     total_steps = 0
     started_at = perf_counter()
     for episode in range(1, episodes + 1):
-        record = run_episode(environment, agent, episode)
+        record = run_episode(environment, agent, episode, action_repeat=action_repeat)
         records.append(record)
         total_steps += record.steps
         if on_episode is not None:

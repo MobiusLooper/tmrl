@@ -49,9 +49,27 @@ type Replay = {
 };
 type ReplayMetadata = Omit<Replay, "initial_state" | "transitions">;
 type ReplayCatalog = {
+  run_id: string;
   schema_version: number;
+  algorithm: "tabular" | "dqn" | string;
   latest_training_episode: number;
   replays: ReplayMetadata[];
+};
+type TrainingRun = {
+  run_id: string;
+  created_at: string;
+  updated_at: string;
+  algorithm: "tabular" | "dqn" | string;
+  seed: number;
+  completed_episode: number;
+  evaluation_count: number;
+  latest_progress: number | null;
+  best_progress: number | null;
+  lap_completed: boolean;
+};
+type RunCatalog = {
+  default_run_id: string | null;
+  runs: TrainingRun[];
 };
 type Mode = "manual" | "replay";
 
@@ -85,6 +103,7 @@ const replayNext = document.querySelector<HTMLButtonElement>("#replay-next")!;
 const replayReload = document.querySelector<HTMLButtonElement>("#replay-reload")!;
 const emptyReload = document.querySelector<HTMLButtonElement>("#empty-reload")!;
 const replayTimeline = document.querySelector<HTMLInputElement>("#replay-timeline")!;
+const replayRunSelect = document.querySelector<HTMLSelectElement>("#replay-run-select")!;
 const replaySelect = document.querySelector<HTMLSelectElement>("#replay-select")!;
 const replayRateSelect = document.querySelector<HTMLSelectElement>("#replay-rate")!;
 const sensorElements = Array.from(document.querySelectorAll<HTMLElement>("[data-sensor]"));
@@ -99,6 +118,8 @@ let manualCurrent: ManualSnapshot | null = null;
 let previousLapCount = 0;
 let toastTimer = 0;
 let catalog: ReplayCatalog | null = null;
+let runCatalog: RunCatalog | null = null;
+let selectedRunId: string | null = null;
 let replay: Replay | null = null;
 let replayIndex = -1;
 let replayPosition = 0;
@@ -258,7 +279,7 @@ const setMode = (nextMode: Mode): void => {
   } else {
     crashElement.classList.remove("visible");
     promptElement.classList.add("hidden");
-    if (!catalog) void loadCatalog();
+    if (!runCatalog) void loadRuns();
   }
   updateReplayControls();
 };
@@ -266,12 +287,49 @@ const setMode = (nextMode: Mode): void => {
 manualModeButton.addEventListener("click", () => setMode("manual"));
 replayModeButton.addEventListener("click", () => setMode("replay"));
 
-const loadCatalog = async (): Promise<void> => {
+const loadRuns = async (): Promise<void> => {
   replayLoading = true;
   showReplayError(null);
   updateReplayControls();
   try {
-    const response = await fetch("/api/replays", { cache: "no-store" });
+    const response = await fetch("/api/runs", { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseDetail(response));
+    const previousRunId = selectedRunId;
+    runCatalog = await response.json() as RunCatalog;
+    replayRunSelect.replaceChildren(...runCatalog.runs.map((run) => {
+      const option = document.createElement("option");
+      option.value = run.run_id;
+      option.textContent = formatRun(run);
+      return option;
+    }));
+    const selectedRun = runCatalog.runs.find((run) => run.run_id === previousRunId)
+      ?? runCatalog.runs.find((run) => run.run_id === runCatalog?.default_run_id);
+    if (!selectedRun) throw new Error("No training runs are available yet");
+    selectedRunId = selectedRun.run_id;
+    replayRunSelect.value = selectedRunId;
+    await loadRunCatalog(selectedRunId);
+  } catch (error) {
+    runCatalog = null;
+    selectedRunId = null;
+    catalog = null;
+    replay = null;
+    showReplayError(error instanceof Error ? error.message : "Unable to load training runs");
+  } finally {
+    replayLoading = false;
+    updateReplayControls();
+  }
+};
+
+const loadRunCatalog = async (runId: string): Promise<void> => {
+  replayLoading = true;
+  replayPlaying = false;
+  replayPlayAll = false;
+  showReplayError(null);
+  updateReplayControls();
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/replays`, {
+      cache: "no-store",
+    });
     if (!response.ok) throw new Error(await responseDetail(response));
     catalog = await response.json() as ReplayCatalog;
     replaySelect.replaceChildren(...catalog.replays.map((item) => {
@@ -291,13 +349,26 @@ const loadCatalog = async (): Promise<void> => {
   }
 };
 
+const formatRun = (run: TrainingRun): string => {
+  const timestamp = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(run.created_at));
+  const best = run.best_progress === null ? "no eval" : `${(run.best_progress * 100).toFixed(0)}% best`;
+  return `${timestamp} · ${run.algorithm.toUpperCase()} · seed ${run.seed} · ep ${run.completed_episode} · ${best}`;
+};
+
 const loadReplay = async (index: number, keepPlaying: boolean): Promise<void> => {
   if (!catalog || index < 0 || index >= catalog.replays.length) return;
   replayLoading = true;
   updateReplayControls();
   const metadata = catalog.replays[index]!;
   try {
-    const response = await fetch(`/api/replays/${metadata.training_episode}`, { cache: "no-store" });
+    if (!selectedRunId) throw new Error("No training run is selected");
+    const response = await fetch(
+      `/api/runs/${encodeURIComponent(selectedRunId)}/replays/${metadata.training_episode}`,
+      { cache: "no-store" },
+    );
     if (!response.ok) throw new Error(await responseDetail(response));
     replay = await response.json() as Replay;
     replayIndex = index;
@@ -356,6 +427,7 @@ const playAllReplays = async (): Promise<void> => {
 const updateReplayControls = (): void => {
   const available = replay !== null && !replayLoading;
   replayPlay.disabled = !available;
+  replayRunSelect.disabled = replayLoading || !runCatalog?.runs.length;
   replayAll.disabled = !catalog?.replays.length || replayLoading;
   replayPrevious.disabled = !available || replayIndex <= 0;
   replayNext.disabled = !available || !catalog || replayIndex >= catalog.replays.length - 1;
@@ -371,8 +443,12 @@ replayPlay.addEventListener("click", toggleReplay);
 replayAll.addEventListener("click", () => void playAllReplays());
 replayPrevious.addEventListener("click", () => void loadReplay(replayIndex - 1, false));
 replayNext.addEventListener("click", () => void loadReplay(replayIndex + 1, false));
-replayReload.addEventListener("click", () => void loadCatalog());
-emptyReload.addEventListener("click", () => void loadCatalog());
+replayReload.addEventListener("click", () => void loadRuns());
+emptyReload.addEventListener("click", () => void loadRuns());
+replayRunSelect.addEventListener("change", () => {
+  selectedRunId = replayRunSelect.value;
+  void loadRunCatalog(selectedRunId);
+});
 replaySelect.addEventListener("change", () => {
   const index = catalog?.replays.findIndex((item) => item.training_episode === Number(replaySelect.value)) ?? -1;
   void loadReplay(index, false);

@@ -61,6 +61,55 @@ def test_default_curriculum_promotes_at_thirty_five_percent() -> None:
     assert curriculum.floor == 0.5
 
 
+@pytest.mark.parametrize(
+    ("floor", "lower", "upper"),
+    [(0.75, 0.75, 0.90), (0.50, 0.50, 0.70), (0.25, 0.25, 0.45)],
+)
+def test_smooth_tabular_curriculum_uses_bounded_stage_bands(
+    floor: float,
+    lower: float,
+    upper: float,
+) -> None:
+    curriculum = AdaptiveCurriculum(
+        Random(3),
+        CurriculumConfig(canonical_probability=0, bounded_stages=True),
+    )
+    curriculum.floor = floor
+    environment = RacingEnv()
+    starts = []
+    for _ in range(100):
+        curriculum.reset(environment)
+        starts.append(curriculum.last_start_progress)
+
+    assert min(starts) == lower
+    assert max(starts) == upper
+    assert all(round(value * 100) % 5 == 0 for value in starts)
+
+
+def test_smooth_tabular_curriculum_samples_half_canonical_starts() -> None:
+    curriculum = AdaptiveCurriculum(
+        Random(14),
+        CurriculumConfig(canonical_probability=0.5, bounded_stages=True),
+    )
+    environment = RacingEnv()
+    canonical = 0
+    for _ in range(1_000):
+        curriculum.reset(environment)
+        canonical += curriculum.last_start_progress == 0
+
+    assert canonical / 1_000 == pytest.approx(0.5, abs=0.04)
+
+
+def test_curriculum_snapshot_preserves_smooth_configuration() -> None:
+    curriculum = AdaptiveCurriculum(
+        Random(9),
+        CurriculumConfig(canonical_probability=0.5, bounded_stages=True),
+    )
+    restored = AdaptiveCurriculum.from_snapshot(curriculum.snapshot())
+    assert restored.config == curriculum.config
+    assert restored.rng.getstate() == curriculum.rng.getstate()
+
+
 def test_stall_terminates_early_with_explicit_penalty() -> None:
     environment = RacingEnv(stall_steps=2)
     environment.step(DiscreteAction.COAST)
@@ -69,6 +118,22 @@ def test_stall_terminates_early_with_explicit_penalty() -> None:
     assert result.done
     assert result.info["termination_reason"] == "stalled"
     assert result.reward == pytest.approx(-15.01)
+
+
+def test_smooth_tabular_default_stall_limit_is_ten_seconds() -> None:
+    from backend.rl import QLearningConfig
+    from backend.training.q_learning import _stall_steps
+
+    config = QLearningConfig()
+    assert _stall_steps(config) == 200
+    environment = RacingEnv(stall_steps=_stall_steps(config))
+    result = None
+    for _ in range(200):
+        result = environment.step(DiscreteAction.COAST)
+    assert result is not None
+    assert result.done
+    assert result.info["termination_reason"] == "stalled"
+    assert result.info["elapsed_time"] == pytest.approx(10.0)
 
 
 def test_near_wall_sensor_values_use_different_tabular_states() -> None:

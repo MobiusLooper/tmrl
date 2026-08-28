@@ -17,15 +17,17 @@ Milestones 1 through 6 are complete. Milestone 7 is implemented and awaiting its
 * a deterministic `reset()` / `step()` environment with nine discrete actions
 * ordered lap-progress checkpoints, configurable rewards and terminal outcomes
 * a reusable headless episode runner and seeded random-policy baseline
-* selectable enhanced tabular Q-learning and continuous-observation Double DQN
+* selectable smooth tabular Q-learning and continuous-observation Double DQN
 * pace-aware rewards, stalled-episode termination and an adaptive backwards curriculum
+* seven-action, 10 Hz tabular control with two-frame action persistence and sticky steering
+* a 155,520-state tabular representation designed for state reuse
 * deterministic greedy evaluation isolated from the training random stream
 * atomic JSON checkpoints with exact deterministic training resumption
 * recorded best-policy evaluation trajectories at every checkpoint
 * browser replay with scrubbing, checkpoint sequences and 1×–10× playback
 * automated tests for physics, geometry, sensors, environment, training and the browser-facing API
 
-The original six-value seed-0 Q-learning validation reached 45% mean greedy-evaluation progress at episode 350, with a best checkpoint of 61%, compared with 2.609% mean progress for the 1,000-episode random baseline. That checkpoint remains replayable but cannot resume under the new observation architecture. The full-lap benchmark for the new learners has not yet been run.
+The original six-value seed-0 Q-learning validation reached 45% mean greedy-evaluation progress at episode 350, with a best checkpoint of 61%, compared with 2.609% mean progress for the 1,000-episode random baseline. That checkpoint remains replayable but cannot resume under the smooth tabular architecture. The full-lap benchmark for the new learner has not yet been run.
 
 Evaluation progress during that run:
 
@@ -59,11 +61,15 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Drive with the arrow keys o
 
 The five sensor rays cover relative angles `-60°`, `-30°`, `0°`, `+30°` and `+60°`. Their numeric readings are normalized over a 12-unit range, where `0` means the boundary is at the car and `1` means no boundary is detected within range.
 
-The learning observation adds normalized lap progress, signed lateral offset, and sine/cosine heading error. Rewards favour first-time checkpoint progress and early, moving checkpoint crossings; re-crossing an old checkpoint cannot farm positive reward. Crashes, 60-second timeouts, and five seconds without new progress all carry explicit terminal penalties. A discount of `0.9995` is calibrated to the simulator's 20 Hz decision rate.
+The shared learning observation adds normalized lap progress, signed lateral offset, and sine/cosine heading error. DQN consumes all ten continuous values. Smooth tabular learning deliberately uses only five discretised sensors, discretised speed, and one of four 25% progress sectors. Its five non-uniform sensor thresholds produce six bins per sensor, for an upper bound of 155,520 states. Ignoring lateral offset and heading error makes more driving situations share Q-values.
 
-Training uses a seeded backwards curriculum: most early episodes begin on later track checkpoints, while canonical starts remain in the mix. Once at least 35% of the latest 50 curriculum starts complete the remaining lap, the starting floor moves from 75% to 50%, 25%, and finally canonical-only training. Greedy evaluation always starts from the original grid at zero speed.
+Rewards favour first-time checkpoint progress and early, moving checkpoint crossings; re-crossing an old checkpoint cannot farm positive reward. Crashes and 60-second timeouts retain explicit terminal penalties. Smooth tabular training and evaluation allow ten seconds without new progress, while DQN retains the environment's five-second default.
 
-Tabular exploration decays linearly by environment transitions rather than episodes, so short curriculum episodes do not exhaust exploration prematurely. The default schedule moves epsilon from `1.0` to `0.10` over 400,000 training transitions. Each curriculum promotion reheats epsilon to at least `0.30` and starts a fresh decay window for the newly introduced track section. Existing ten-value checkpoints migrate by deriving their transition count from episode history.
+Smooth tabular control chooses among seven actions: coast, throttle, brake, left, left with throttle, right, and right with throttle. The two brake-and-steer enum values remain available to DQN and legacy replays but are never selected or used for tabular bootstrapping. A tabular decision is made at 10 Hz and held for two 50 ms physics frames. When the previous action is within `0.03` of the best Q-value it is retained, which supplies persistence without changing rewards. Replays still contain every 20 Hz physics frame and all nine browser-facing Q-values.
+
+Tabular training uses a seeded backwards curriculum with 50% canonical starts. Other starts are sampled from the current 75–90%, 50–70%, or 25–45% band. Once at least 35% of the latest 50 non-canonical starts complete the remaining lap, training advances to the next band and reheats epsilon to `0.30`. Greedy evaluation always starts from the original grid at zero speed.
+
+Tabular epsilon decays linearly by macro decisions rather than episodes or physics frames, so short curriculum episodes do not exhaust exploration prematurely. The default schedule moves epsilon from `1.0` to `0.10` over 200,000 decisions, approximately the same simulated driving as 400,000 former single-frame decisions. The terminal reports physical throughput, decision count, epsilon, canonical progress, lap completions, terminal rates, and replay steering changes.
 
 Python dependencies are installed automatically into an isolated environment by `uv`.
 
@@ -91,7 +97,7 @@ Run the enhanced tabular learner with ten-episode greedy evaluation every 50 epi
 uv run python -m backend.training.train --algorithm tabular --episodes 3000 --seed 0
 ```
 
-The exploration schedule can be changed with `--epsilon-decay-steps`, `--epsilon-min`, and `--epsilon-reheat`.
+The exploration schedule can be changed with `--epsilon-decay-steps`, `--epsilon-min`, and `--epsilon-reheat`. The smooth-control defaults can be overridden with `--action-repeat`, `--sticky-tolerance`, `--canonical-start-probability`, and `--tabular-stall-seconds`.
 
 Run the PyTorch Double DQN learner:
 
@@ -99,31 +105,33 @@ Run the PyTorch Double DQN learner:
 uv run python -m backend.training.train --algorithm dqn --episodes 3000 --max-transitions 1000000 --seed 0
 ```
 
-Both learners evaluate from the canonical starting grid and preserve their best evaluated policy. Tabular training defaults to `artifacts/latest.json` and `artifacts/latest-best.json`. DQN defaults to `artifacts/dqn-latest.json`, with resumable `dqn-latest.pt` and best-policy `dqn-latest-best.pt` sidecars.
+Both learners evaluate from the canonical starting grid and preserve their best evaluated policy. Every fresh command creates a timestamped run under `artifacts/runs/`, for example `artifacts/runs/20260828T143012Z-tabular-smooth-seed0-a1b2c3d4/`. Tabular runs contain `checkpoint.json` and `best.json`; DQN runs contain `checkpoint.json`, `model.pt`, and `best-model.pt`.
 
-The command reports training throughput, epsilon and evaluation progress, saves `artifacts/latest.json` after every evaluation, and records the best greedy attempt from each evaluation batch. Training and evaluation use separate seeded random streams, so changing evaluation frequency does not alter learning.
+The command prints its run ID and checkpoint path, reports training throughput, epsilon and evaluation progress, saves after every evaluation, and records the best greedy attempt from each evaluation batch. Training and evaluation use separate seeded random streams, so changing evaluation frequency does not alter learning.
 
 Resume tabular training by supplying the checkpoint and a new total target episode:
 
 ```bash
-uv run python -m backend.training.train --algorithm tabular --resume artifacts/latest.json --episodes 5000
+uv run python -m backend.training.train --algorithm tabular \
+  --resume artifacts/runs/RUN_ID/checkpoint.json --episodes 5000
 ```
 
 Resume DQN training similarly:
 
 ```bash
-uv run python -m backend.training.train --algorithm dqn --resume artifacts/dqn-latest.json --episodes 5000
+uv run python -m backend.training.train --algorithm dqn \
+  --resume artifacts/runs/RUN_ID/checkpoint.json --episodes 5000
 ```
 
-The episode value is the new total target, not the number of additional episodes. Saved learner, curriculum and random state are restored. Use `--checkpoint path/to/run.json` to keep experiments separate.
+The episode value is the new total target, not the number of additional episodes. Saved learner, curriculum and random state are restored, and the resumed checkpoint remains in its original run. `--checkpoint path/to/run.json` remains available for a fresh run with a custom output path, but cannot be combined with `--resume`.
 
-Open the webapp and switch to **Agent Replay** to watch one selected checkpoint or the entire training sequence. Replays can be paused, scrubbed and played at 1×, 2×, 5× or 10× speed. The server reads `artifacts/latest.json` by default; point it at a different run with:
+Open the webapp and switch to **Agent Replay** to choose among discovered tabular and DQN runs, then watch one evaluation checkpoint or the entire sequence. Replays can be paused, scrubbed and played at 1×, 2×, 5× or 10× speed. The most recently updated run is selected by default. To pin a different default, including a checkpoint outside `artifacts/`, use:
 
 ```bash
-RL_RACER_CHECKPOINT=path/to/run.json npm run dev
+RL_RACER_CHECKPOINT=path/to/checkpoint.json npm run dev
 ```
 
-Legacy six-value checkpoints remain replayable, but cannot resume into the ten-value learning architecture. To train without replacing the legacy artifact, pass a new path such as `--checkpoint artifacts/tabular-v2.json`. Training still runs from the command line; live metrics and browser-controlled experiments remain future work.
+Legacy top-level checkpoints are included in the run selector and remain replayable. Six-part and previous nine-part tabular Q-tables cannot resume into the seven-part `tabular-smooth-v3` architecture; start a fresh run without `--resume`. Smooth-v3 checkpoints include the architecture, action repeat, sticky tolerance, curriculum probability, and stall duration needed for an exact compatible resume. Training runs from the command line; named experiment grouping, live metrics, and browser-controlled experiments remain future work.
 
 ## Production build
 
@@ -137,7 +145,9 @@ The FastAPI server serves the built app at [http://127.0.0.1:8000](http://127.0.
 ## Current browser API
 
 * `GET /api/track` returns track geometry and authoritative sensor configuration.
-* `GET /api/replays` returns the chronological evaluation replay catalog.
-* `GET /api/replays/latest` returns the newest selected trajectory.
-* `GET /api/replays/{training_episode}` returns one selected checkpoint trajectory.
+* `GET /api/runs` returns discovered runs and the default run ID.
+* `GET /api/runs/{run_id}/replays` returns one run's chronological evaluation catalog.
+* `GET /api/runs/{run_id}/replays/latest` returns that run's newest selected trajectory.
+* `GET /api/runs/{run_id}/replays/{training_episode}` returns one selected trajectory.
+* The existing `GET /api/replays`, `/api/replays/latest`, and `/api/replays/{training_episode}` routes remain aliases for the default run.
 * `/ws/play` creates an isolated manual-driving session and streams state snapshots containing the five normalized sensor readings.

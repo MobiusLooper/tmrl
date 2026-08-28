@@ -13,9 +13,16 @@ from backend.training.checkpoint import (
     checkpoint_from_agent,
     load_checkpoint,
     save_checkpoint,
+    load_checkpoint_replays,
 )
 from backend.training.q_learning import _training_setup, build_parser
-from backend.training.replay import EvaluationReplay, ReplayState, ReplayTransition, select_best_replay
+from backend.training.replay import (
+    EvaluationReplay,
+    ReplayState,
+    ReplayTransition,
+    select_best_replay,
+    steering_metrics,
+)
 from backend.training.trainer import run_training
 
 
@@ -46,8 +53,12 @@ def test_checkpoint_round_trip_restores_complete_agent_and_history(tmp_path: Pat
 
     save_checkpoint(checkpoint, path)
     restored = load_checkpoint(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert restored == checkpoint
+    assert payload["agent"]["config"]["architecture"] == "tabular-smooth-v3"
+    assert payload["agent"]["config"]["action_repeat"] == 2
+    assert payload["agent"]["config"]["sticky_tolerance"] == 0.03
     restored_agent = restored.restore_agent()
     assert restored_agent.q_table.snapshot() == agent.q_table.snapshot()
     assert restored_agent.rng.getstate() == agent.rng.getstate()
@@ -128,8 +139,11 @@ def test_replay_contains_causal_transitions_and_nine_q_values() -> None:
     assert replay.steps == len(replay.transitions) == 3
     assert replay.initial_state.tick == 0
     assert [transition.state.tick for transition in replay.transitions] == [1, 2, 3]
+    assert replay.transitions[0].action == replay.transitions[1].action
+    assert replay.transitions[0].q_values == replay.transitions[1].q_values
     assert all(len(transition.q_values) == len(DiscreteAction) for transition in replay.transitions)
     assert replay.transitions[-1].state.current_progress >= 0
+    assert replay.simulated_duration == pytest.approx(0.15)
 
 
 def test_best_replay_selection_uses_progress_return_duration_then_earliest_episode() -> None:
@@ -161,6 +175,39 @@ def test_best_replay_selection_uses_progress_return_duration_then_earliest_episo
     assert select_best_replay(replays).evaluation_episode == 4
 
 
+def test_steering_metrics_count_changes_and_direct_reversals() -> None:
+    state = ReplayState(0, 0, 0, 0, 0, False, (1, 1, 1, 1, 1), 0)
+    actions = [
+        DiscreteAction.LEFT,
+        DiscreteAction.LEFT,
+        DiscreteAction.RIGHT,
+        DiscreteAction.RIGHT,
+        DiscreteAction.COAST,
+    ]
+    transitions = tuple(
+        ReplayTransition(int(action), action.name, (0,) * 9, 0, state)
+        for action in actions
+    )
+    replay = EvaluationReplay(
+        10,
+        1,
+        0,
+        0,
+        0.25,
+        5,
+        "timeout",
+        False,
+        state,
+        transitions,
+    )
+
+    metrics = steering_metrics(replay)
+    assert metrics.changes == 3
+    assert metrics.direct_reversals == 1
+    assert metrics.changes_per_second == 12
+    assert metrics.direct_reversals_per_second == 4
+
+
 def test_training_stops_at_an_episode_boundary_before_evaluation() -> None:
     seen = []
     result = run_training(
@@ -183,7 +230,7 @@ def test_checkpoint_rejects_unsupported_schema_and_invalid_q_table(tmp_path: Pat
     with pytest.raises(CheckpointError, match="unsupported"):
         load_checkpoint(path)
 
-    with pytest.raises(ValueError, match="six legacy or nine current"):
+    with pytest.raises(ValueError, match="six or nine legacy, or seven smooth"):
         QTable.from_snapshot({(0,): (0,) * 9}, bucket_count=5)
     with pytest.raises(ValueError, match="9 finite"):
         QTable.from_snapshot({(0,) * 6: (0,) * 8}, bucket_count=5)
@@ -219,3 +266,66 @@ def test_resume_cli_uses_a_total_target_and_rejects_conflicting_settings(tmp_pat
                 ["--resume", str(path), "--episodes", "2", "--learning-rate", "0.2"]
             )
         )
+
+
+def test_fresh_cli_accepts_smooth_control_overrides() -> None:
+    parser = build_parser()
+    setup = _training_setup(
+        parser.parse_args(
+            [
+                "--episodes",
+                "2",
+                "--action-repeat",
+                "3",
+                "--sticky-tolerance",
+                "0.05",
+                "--canonical-start-probability",
+                "0.6",
+                "--tabular-stall-seconds",
+                "12",
+            ]
+        )
+    )
+
+    assert setup.config.action_repeat == 3
+    assert setup.config.sticky_tolerance == 0.05
+    assert setup.config.canonical_start_probability == 0.6
+    assert setup.config.tabular_stall_seconds == 12
+
+
+def test_previous_nine_part_checkpoint_is_replayable_but_cannot_resume(tmp_path: Path) -> None:
+    agent = QLearningAgent(Random(8))
+    result = run_training(
+        RacingEnv(max_steps=2),
+        agent,
+        1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        record_replays=True,
+    )
+    checkpoint = checkpoint_from_agent(
+        agent,
+        seed=8,
+        completed_episode=1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        evaluation_seed=1_000_008,
+        training_wall_time=result.training_wall_time,
+        records=result.records,
+        evaluations=result.evaluations,
+        replays=result.replays,
+    )
+    path = tmp_path / "legacy-nine.json"
+    save_checkpoint(checkpoint, path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["agent"]["config"].pop("architecture")
+    for row in payload["agent"]["q_table"]:
+        row["state"].extend([0, 0])
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _, algorithm, replays = load_checkpoint_replays(path)
+    assert algorithm == "tabular"
+    assert replays == result.replays
+    parser = build_parser()
+    with pytest.raises(ValueError, match="remains replayable.*fresh run"):
+        _training_setup(parser.parse_args(["--resume", str(path), "--episodes", "2"]))

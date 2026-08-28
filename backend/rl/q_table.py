@@ -47,10 +47,18 @@ class QTable:
         for raw_state, raw_values in snapshot.items():
             state = tuple(raw_state)
             values = tuple(float(value) for value in raw_values)
-            if len(state) not in {6, 9} or any(
+            if len(state) not in {6, 7, 9} or any(
                 not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in state
             ):
-                raise ValueError("Q-table states must contain six legacy or nine current bucket indices")
+                raise ValueError(
+                    "Q-table states must contain six or nine legacy, or seven smooth bucket indices"
+                )
+            if len(state) == 7 and (
+                any(value > 5 for value in state[:5])
+                or state[5] > 4
+                or state[6] > 3
+            ):
+                raise ValueError("smooth Q-table state indices are outside the tabular-v3 bounds")
             if len(values) != ACTION_COUNT or any(not isfinite(value) for value in values):
                 raise ValueError(f"Q-table rows must contain {ACTION_COUNT} finite values")
             table._rows[state] = list(values)

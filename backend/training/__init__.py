@@ -3,7 +3,7 @@
 from .agents import Agent, RandomAgent
 from .checkpoint import CheckpointError, TrainingCheckpoint, load_checkpoint, load_checkpoint_replays, save_checkpoint
 from .evaluator import EvaluationRecord, evaluate_policy, evaluate_policy_with_replay
-from .replay import EvaluationReplay, ReplayState, ReplayTransition
+from .replay import EvaluationReplay, ReplayState, ReplayTransition, SteeringMetrics, steering_metrics
 from .runner import EpisodeRecord, RunSummary, run_episode, run_episodes, summarize_run
 from .trainer import TrainingResult, run_training, run_training_episode
 
@@ -16,6 +16,7 @@ __all__ = [
     "RandomAgent",
     "ReplayState",
     "ReplayTransition",
+    "SteeringMetrics",
     "RunSummary",
     "TrainingResult",
     "TrainingCheckpoint",
@@ -28,5 +29,6 @@ __all__ = [
     "run_training",
     "run_training_episode",
     "save_checkpoint",
+    "steering_metrics",
     "summarize_run",
 ]

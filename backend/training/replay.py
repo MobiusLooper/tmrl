@@ -86,30 +86,47 @@ class EvaluationReplay:
             raise ValueError("replay metadata must be finite")
 
 
+@dataclass(frozen=True, slots=True)
+class SteeringMetrics:
+    changes: int
+    direct_reversals: int
+    changes_per_second: float
+    direct_reversals_per_second: float
+
+
 def record_evaluation_episode(
     environment: ReplayEnvironment,
     policy: ReplayPolicy,
     *,
     training_episode: int,
     evaluation_episode: int,
+    action_repeat: int = 1,
 ) -> tuple[EpisodeRecord, EvaluationReplay]:
+    if action_repeat < 1:
+        raise ValueError("action_repeat must be positive")
+    start_episode = getattr(policy, "start_episode", None)
+    if callable(start_episode):
+        start_episode()
     observation = environment.reset()
     initial_state = replay_state(environment.render_state())
     transitions: list[ReplayTransition] = []
     while True:
         q_values = policy.q_values(observation)
         action = policy.choose_action(observation)
-        result = environment.step(action)
-        transitions.append(
-            ReplayTransition(
-                action=int(action),
-                action_name=action.name,
-                q_values=q_values,
-                reward=result.reward,
-                state=replay_state(environment.render_state()),
+        for _ in range(action_repeat):
+            result = environment.step(action)
+            transitions.append(
+                ReplayTransition(
+                    action=int(action),
+                    action_name=action.name,
+                    q_values=q_values,
+                    reward=result.reward,
+                    state=replay_state(environment.render_state()),
+                )
             )
-        )
-        observation = result.observation
+            observation = result.observation
+            if result.done:
+                break
         if not result.done:
             continue
         record = _episode_record(result.info, evaluation_episode)
@@ -138,6 +155,26 @@ def select_best_replay(replays: list[EvaluationReplay]) -> EvaluationReplay:
             -replay.simulated_duration,
             -replay.evaluation_episode,
         ),
+    )
+
+
+def steering_metrics(replay: EvaluationReplay) -> SteeringMetrics:
+    previous = 0
+    changes = 0
+    reversals = 0
+    for transition in replay.transitions:
+        current = _steering_state(DiscreteAction(transition.action))
+        if current != previous:
+            changes += 1
+            if current * previous == -1:
+                reversals += 1
+        previous = current
+    duration = replay.simulated_duration
+    return SteeringMetrics(
+        changes=changes,
+        direct_reversals=reversals,
+        changes_per_second=changes / duration if duration else 0.0,
+        direct_reversals_per_second=reversals / duration if duration else 0.0,
     )
 
 
@@ -178,3 +215,19 @@ def _integer(value: object, name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"render state {name} must be an integer")
     return value
+
+
+def _steering_state(action: DiscreteAction) -> int:
+    if action in {
+        DiscreteAction.LEFT,
+        DiscreteAction.LEFT_THROTTLE,
+        DiscreteAction.LEFT_BRAKE,
+    }:
+        return -1
+    if action in {
+        DiscreteAction.RIGHT,
+        DiscreteAction.RIGHT_THROTTLE,
+        DiscreteAction.RIGHT_BRAKE,
+    }:
+        return 1
+    return 0

@@ -7,7 +7,14 @@ from random import Random
 import pytest
 
 from backend.env.environment import DiscreteAction, Observation, RacingEnv, StepResult
-from backend.rl import GreedyPolicy, QLearningAgent, QLearningConfig, StateDiscretizer
+from backend.rl import (
+    TABULAR_ACTIONS,
+    TABULAR_STATE_COUNT,
+    GreedyPolicy,
+    QLearningAgent,
+    QLearningConfig,
+    StateDiscretizer,
+)
 from backend.training import evaluate_policy, run_training, run_training_episode
 
 ZERO_OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
@@ -17,8 +24,47 @@ NEXT_OBSERVATION: Observation = (0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.0, 1.
 def test_discretizer_clamps_values_and_handles_bucket_boundaries() -> None:
     observation: Observation = (-0.1, 0.039, 0.04, 0.3, 1.0, 1.2, 1.2, -1.2, 0.0, 1.0)
 
-    assert StateDiscretizer(5).discretize(observation) == (0, 0, 1, 4, 5, 4, 19, 0, 4)
-    assert StateDiscretizer(5).discretize((1.0,) * 10) == (5, 5, 5, 5, 5, 4, 19, 4, 5)
+    assert StateDiscretizer(5).discretize(observation) == (0, 0, 1, 4, 5, 4, 3)
+    assert StateDiscretizer(5).discretize((1.0,) * 10) == (5, 5, 5, 5, 5, 4, 3)
+    assert TABULAR_STATE_COUNT == 155_520
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.0399, 0),
+        (0.04, 1),
+        (0.0799, 1),
+        (0.08, 2),
+        (0.1499, 2),
+        (0.15, 3),
+        (0.2999, 3),
+        (0.30, 4),
+        (0.5999, 4),
+        (0.60, 5),
+    ],
+)
+def test_sensor_bucket_boundaries(value: float, expected: int) -> None:
+    observation: Observation = (value, 1, 1, 1, 1, 0, 0, 0, 0, 1)
+    assert StateDiscretizer().discretize(observation)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("speed", "expected"),
+    [(0.0999, 0), (0.10, 1), (0.2499, 1), (0.25, 2), (0.70, 4)],
+)
+def test_speed_bucket_boundaries(speed: float, expected: int) -> None:
+    observation: Observation = (0, 0, 0, 0, 0, speed, 0, 0, 0, 1)
+    assert StateDiscretizer().discretize(observation)[5] == expected
+
+
+@pytest.mark.parametrize(
+    ("progress", "expected"),
+    [(0.2499, 0), (0.25, 1), (0.4999, 1), (0.50, 2), (0.75, 3), (1.0, 3)],
+)
+def test_progress_sector_boundaries(progress: float, expected: int) -> None:
+    observation: Observation = (0, 0, 0, 0, 0, 0, progress, 0, 0, 1)
+    assert StateDiscretizer().discretize(observation)[6] == expected
 
 
 @pytest.mark.parametrize("value", [nan, inf, -inf])
@@ -28,7 +74,7 @@ def test_discretizer_rejects_non_finite_values(value: float) -> None:
 
 
 def test_discretizer_validates_shape_and_bucket_count() -> None:
-    with pytest.raises(ValueError, match="at least 2"):
+    with pytest.raises(ValueError, match="requires five"):
         StateDiscretizer(1)
     with pytest.raises(ValueError, match="ten"):
         StateDiscretizer().discretize((0.0,) * 5)
@@ -49,6 +95,31 @@ def test_q_learning_update_bootstraps_only_non_terminal_transitions() -> None:
 
     agent.update(ZERO_OBSERVATION, DiscreteAction.THROTTLE, 2.0, NEXT_OBSERVATION, True)
     assert agent.q_table.value(state, DiscreteAction.THROTTLE) == pytest.approx(2.65)
+
+
+def test_q_learning_uses_macro_duration_for_bootstrap_discount() -> None:
+    agent = QLearningAgent(
+        Random(0),
+        QLearningConfig(
+            learning_rate=1,
+            discount=0.5,
+            epsilon_start=0,
+            epsilon_min=0,
+        ),
+    )
+    next_state = agent.discretizer.discretize(NEXT_OBSERVATION)
+    agent.q_table.set_value(next_state, DiscreteAction.LEFT, 4)
+
+    agent.update(
+        ZERO_OBSERVATION,
+        DiscreteAction.THROTTLE,
+        1.5,
+        NEXT_OBSERVATION,
+        False,
+        duration=2,
+    )
+    state = agent.discretizer.discretize(ZERO_OBSERVATION)
+    assert agent.q_table.value(state, DiscreteAction.THROTTLE) == 2.5
 
 
 def test_epsilon_schedule_uses_training_transitions_and_clamps() -> None:
@@ -82,7 +153,7 @@ def test_epsilon_reheats_and_starts_a_new_transition_schedule() -> None:
     assert agent.epsilon == pytest.approx(0.2)
 
 
-def test_seeded_exploration_and_greedy_tie_breaking_are_reproducible() -> None:
+def test_seeded_exploration_uses_only_the_seven_active_actions() -> None:
     config = QLearningConfig(epsilon_start=1, epsilon_min=1)
     first = QLearningAgent(Random(12), config)
     second = QLearningAgent(Random(12), config)
@@ -90,15 +161,56 @@ def test_seeded_exploration_and_greedy_tie_breaking_are_reproducible() -> None:
         second.choose_action(ZERO_OBSERVATION) for _ in range(20)
     ]
 
-    state = first.discretizer.discretize(ZERO_OBSERVATION)
-    first.q_table.set_value(state, DiscreteAction.LEFT, 3)
-    first.q_table.set_value(state, DiscreteAction.RIGHT, 3)
-    policy_a = GreedyPolicy(first, Random(4))
-    policy_b = GreedyPolicy(first, Random(4))
-    actions_a = [policy_a.choose_action(ZERO_OBSERVATION) for _ in range(20)]
-    actions_b = [policy_b.choose_action(ZERO_OBSERVATION) for _ in range(20)]
-    assert actions_a == actions_b
-    assert set(actions_a) == {DiscreteAction.LEFT, DiscreteAction.RIGHT}
+    assert set(first.choose_action(ZERO_OBSERVATION) for _ in range(500)) == set(TABULAR_ACTIONS)
+
+
+def test_greedy_policy_is_sticky_and_tie_breaking_is_deterministic() -> None:
+    agent = QLearningAgent(
+        Random(1),
+        QLearningConfig(epsilon_start=0, epsilon_min=0, sticky_tolerance=0.03),
+    )
+    state = agent.discretizer.discretize(ZERO_OBSERVATION)
+    agent.q_table.set_value(state, DiscreteAction.RIGHT, 1.0)
+    agent.q_table.set_value(state, DiscreteAction.LEFT, 0.98)
+    policy = GreedyPolicy(agent, previous_action=DiscreteAction.LEFT)
+    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.LEFT
+
+    agent.q_table.set_value(state, DiscreteAction.LEFT, 0.96)
+    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.RIGHT
+
+    agent.q_table.set_value(state, DiscreteAction.LEFT, 1.0)
+    policy.previous_action = None
+    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.LEFT
+    policy.previous_action = DiscreteAction.RIGHT
+    assert policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.RIGHT
+
+    empty_policy = GreedyPolicy(QLearningAgent(Random(2)))
+    assert empty_policy.choose_action(ZERO_OBSERVATION) == DiscreteAction.COAST
+    empty_policy.start_episode()
+    assert empty_policy.previous_action is None
+
+
+def test_inactive_actions_are_masked_and_excluded_from_bootstrapping() -> None:
+    agent = QLearningAgent(
+        Random(1),
+        QLearningConfig(
+            learning_rate=1,
+            discount=1,
+            epsilon_start=0,
+            epsilon_min=0,
+        ),
+    )
+    next_state = agent.discretizer.discretize(NEXT_OBSERVATION)
+    for action in TABULAR_ACTIONS:
+        agent.q_table.set_value(next_state, action, -2)
+    agent.q_table.set_value(next_state, DiscreteAction.LEFT_BRAKE, 100)
+    agent.q_table.set_value(next_state, DiscreteAction.RIGHT_BRAKE, 100)
+
+    assert agent.q_values(NEXT_OBSERVATION)[5] == 0
+    assert agent.q_values(NEXT_OBSERVATION)[8] == 0
+    agent.update(ZERO_OBSERVATION, DiscreteAction.THROTTLE, 0, NEXT_OBSERVATION, False)
+    state = agent.discretizer.discretize(ZERO_OBSERVATION)
+    assert agent.q_table.value(state, DiscreteAction.THROTTLE) == -2
 
 
 @dataclass
@@ -128,15 +240,26 @@ class TwoStepEnvironment:
         )
 
 
-def test_training_updates_each_transition_and_evaluation_is_read_only() -> None:
+def test_training_aggregates_two_ticks_into_one_discounted_update() -> None:
     agent = QLearningAgent(
         Random(2),
-        QLearningConfig(epsilon_start=0, epsilon_min=0, discount=0),
+        QLearningConfig(
+            learning_rate=1,
+            epsilon_start=0.8,
+            epsilon_min=0.2,
+            discount=0.5,
+            epsilon_decay_steps=2,
+        ),
     )
     record = run_training_episode(TwoStepEnvironment(), agent, 1)
 
     assert record.steps == 2
-    assert agent.visited_states == 2
+    assert agent.visited_states == 1
+    assert agent.training_steps == 1
+    state = agent.discretizer.discretize(ZERO_OBSERVATION)
+    assert agent.previous_action is not None
+    assert agent.q_table.value(state, agent.previous_action) == 2.0
+    assert agent.epsilon == pytest.approx(0.5)
     before = agent.q_table.snapshot()
     epsilon = agent.epsilon
     evaluation = evaluate_policy(
@@ -144,11 +267,33 @@ def test_training_updates_each_transition_and_evaluation_is_read_only() -> None:
         GreedyPolicy(agent, Random(9)),
         3,
         training_episode=1,
+        action_repeat=2,
     )
 
     assert evaluation.mean_progress == pytest.approx(0.2)
     assert agent.q_table.snapshot() == before
     assert agent.epsilon == epsilon
+
+
+def test_macro_action_stops_after_a_terminal_first_tick() -> None:
+    agent = QLearningAgent(
+        Random(1),
+        QLearningConfig(epsilon_start=0, epsilon_min=0, action_repeat=2),
+    )
+    record = run_training_episode(RacingEnv(max_steps=1), agent, 1)
+
+    assert record.steps == 1
+    assert record.termination_reason == "timeout"
+    assert agent.training_steps == 1
+
+
+def test_training_episode_resets_previous_action() -> None:
+    agent = QLearningAgent(Random(1))
+    agent.previous_action = DiscreteAction.RIGHT
+    run_training_episode(RacingEnv(max_steps=1), agent, 1)
+    assert agent.previous_action in TABULAR_ACTIONS
+    agent.start_episode(2)
+    assert agent.previous_action is None
 
 
 def test_short_real_training_run_is_seed_reproducible() -> None:

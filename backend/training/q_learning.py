@@ -9,20 +9,21 @@ from random import Random
 from typing import Sequence, TypeVar
 
 from backend.env.environment import RacingEnv
-from backend.rl.agent import QLearningAgent, QLearningConfig
+from backend.env.simulation import DT
+from backend.rl.agent import TABULAR_ARCHITECTURE, QLearningAgent, QLearningConfig
 
 from .checkpoint import (
-    DEFAULT_CHECKPOINT_PATH,
     CheckpointError,
     TrainingCheckpoint,
     checkpoint_from_agent,
     load_checkpoint,
     save_checkpoint,
 )
-from .curriculum import AdaptiveCurriculum
+from .curriculum import AdaptiveCurriculum, CurriculumConfig
 from .evaluator import EvaluationRecord
-from .replay import EvaluationReplay
+from .replay import EvaluationReplay, steering_metrics
 from .runner import EpisodeRecord, summarize_run
+from .run_storage import create_run, new_run_metadata, resume_run_metadata
 from .trainer import run_training
 
 T = TypeVar("T")
@@ -43,10 +44,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epsilon-decay-steps", type=_positive_int)
     parser.add_argument("--epsilon-reheat", type=float)
     parser.add_argument("--buckets", type=_bucket_count)
+    parser.add_argument("--action-repeat", type=_positive_int)
+    parser.add_argument("--sticky-tolerance", type=_non_negative_float)
+    parser.add_argument(
+        "--canonical-start-probability",
+        "--canonical-probability",
+        dest="canonical_start_probability",
+        type=_probability,
+    )
+    parser.add_argument(
+        "--tabular-stall-seconds",
+        "--stall-seconds",
+        dest="tabular_stall_seconds",
+        type=_positive_float,
+    )
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        help=f"checkpoint output path (default: {DEFAULT_CHECKPOINT_PATH})",
+        help="custom checkpoint output path (default: a timestamped artifacts/runs directory)",
     )
     parser.add_argument("--resume", type=Path, help="resume a saved checkpoint")
     return parser
@@ -54,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.resume is not None and args.checkpoint is not None:
+        raise SystemExit("--checkpoint cannot be combined with --resume")
     try:
         setup = _training_setup(args)
     except (CheckpointError, ValueError) as error:
@@ -66,10 +83,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     curriculum = (
         AdaptiveCurriculum.from_snapshot(setup.curriculum)
         if setup.curriculum is not None
-        else AdaptiveCurriculum(Random(setup.seed + 2_000_000))
+        else _new_curriculum(setup.seed, setup.config)
     )
     base_wall_time = setup.training_wall_time
-    checkpoint_path = args.checkpoint or args.resume or DEFAULT_CHECKPOINT_PATH
+    if args.resume is not None:
+        checkpoint_path = args.resume
+        run_metadata = resume_run_metadata(
+            checkpoint_path,
+            run_id=setup.run_id,
+            created_at=setup.created_at,
+        )
+    elif args.checkpoint is not None:
+        checkpoint_path = args.checkpoint
+        run_metadata = new_run_metadata("tabular-smooth", setup.seed)
+    else:
+        run_metadata, checkpoint_path = create_run("tabular-smooth", setup.seed)
+    print(f"run {run_metadata.run_id} | checkpoint {checkpoint_path}")
     stop = _GracefulStop()
     previous_handler = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, stop.handle_signal)
@@ -90,6 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             evaluations=tuple(evaluations),
             replays=tuple(replays),
             curriculum=curriculum.snapshot(),
+            run_metadata=run_metadata.touch(),
         )
         save_checkpoint(checkpoint, destination or checkpoint_path)
 
@@ -103,7 +133,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             throughput = (previous_steps + total_steps) / total_elapsed if total_elapsed else 0.0
             print(
                 f"episode {record.episode}/{args.episodes} | steps {previous_steps + total_steps} | "
-                f"{throughput:.1f} steps/s | epsilon {epsilon:.4f}"
+                f"{throughput:.1f} physical steps/s | decisions {agent.training_steps} | "
+                f"epsilon {epsilon:.4f}"
             )
 
     def retain_replay(replay: EvaluationReplay) -> None:
@@ -113,7 +144,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         evaluations.append(record)
         print(
             f"evaluation @{record.training_episode} | mean progress "
-            f"{record.mean_progress:.3%} | best {record.best_progress:.3%}"
+            f"{record.mean_progress:.3%} | best {record.best_progress:.3%} | "
+            f"laps {record.lap_completions} | crashes {record.crash_count / record.episodes:.0%} | "
+            f"stalls {record.stalled_count / record.episodes:.0%} | "
+            f"timeouts {record.timeout_count / record.episodes:.0%}"
         )
         persist(latest_elapsed)
         best = max(
@@ -121,12 +155,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             key=lambda value: (value.lap_completions, value.best_progress, value.mean_return),
         )
         if record is best:
-            best_path = checkpoint_path.with_name(f"{checkpoint_path.stem}-best{checkpoint_path.suffix}")
+            best_path = (
+                checkpoint_path.with_name("best.json")
+                if checkpoint_path.name == "checkpoint.json"
+                else checkpoint_path.with_name(f"{checkpoint_path.stem}-best{checkpoint_path.suffix}")
+            )
             persist(latest_elapsed, best_path)
 
     try:
         result = run_training(
-            RacingEnv(),
+            RacingEnv(stall_steps=_stall_steps(setup.config)),
             agent,
             args.episodes,
             start_episode=setup.completed_episode + 1,
@@ -151,10 +189,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     total_wall_time = base_wall_time + result.training_wall_time
     summary = summarize_run(records, seed=setup.seed, wall_time=total_wall_time)
     output = {
+        "run_id": run_metadata.run_id,
         "checkpoint": str(checkpoint_path),
         "config": asdict(setup.config),
         "summary": asdict(summary),
         "final_epsilon": agent.epsilon,
+        "tabular_decisions": agent.training_steps,
         "visited_states": agent.visited_states,
         "evaluations": [asdict(evaluation) for evaluation in evaluations],
         "replays": [
@@ -164,6 +204,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "progress": replay.furthest_progress,
                 "return": replay.total_return,
                 "termination_reason": replay.termination_reason,
+                "steering_changes_per_second": steering_metrics(replay).changes_per_second,
+                "direct_steering_reversals_per_second": (
+                    steering_metrics(replay).direct_reversals_per_second
+                ),
             }
             for replay in replays
         ],
@@ -203,6 +247,8 @@ class _TrainingSetup:
         evaluations: tuple[EvaluationRecord, ...] = (),
         replays: tuple[EvaluationReplay, ...] = (),
         curriculum: dict[str, object] | None = None,
+        run_id: str | None = None,
+        created_at: str | None = None,
     ) -> None:
         self.seed = seed
         self.completed_episode = completed_episode
@@ -216,6 +262,8 @@ class _TrainingSetup:
         self.evaluations = evaluations
         self.replays = replays
         self.curriculum = curriculum
+        self.run_id = run_id
+        self.created_at = created_at
 
 
 def _training_setup(args: argparse.Namespace) -> _TrainingSetup:
@@ -227,9 +275,13 @@ def _training_setup(args: argparse.Namespace) -> _TrainingSetup:
             epsilon_start=_value_or(args.epsilon_start, 1.0),
             epsilon_min=_value_or(args.epsilon_min, 0.10),
             epsilon_decay=_value_or(args.epsilon_decay, 0.997),
-            epsilon_decay_steps=_value_or(args.epsilon_decay_steps, 400_000),
+            epsilon_decay_steps=_value_or(args.epsilon_decay_steps, 200_000),
             epsilon_reheat=_value_or(args.epsilon_reheat, 0.30),
             bucket_count=_value_or(args.buckets, 5),
+            action_repeat=_value_or(args.action_repeat, 2),
+            sticky_tolerance=_value_or(args.sticky_tolerance, 0.03),
+            canonical_start_probability=_value_or(args.canonical_start_probability, 0.50),
+            tabular_stall_seconds=_value_or(args.tabular_stall_seconds, 10.0),
         )
         return _TrainingSetup(
             seed=seed,
@@ -258,12 +310,29 @@ def _training_setup(args: argparse.Namespace) -> _TrainingSetup:
     _match("epsilon_decay_steps", args.epsilon_decay_steps, checkpoint.config.epsilon_decay_steps)
     _match("epsilon_reheat", args.epsilon_reheat, checkpoint.config.epsilon_reheat)
     _match("buckets", args.buckets, checkpoint.config.bucket_count)
+    _match("action_repeat", args.action_repeat, checkpoint.config.action_repeat)
+    _match("sticky_tolerance", args.sticky_tolerance, checkpoint.config.sticky_tolerance)
+    _match(
+        "canonical_start_probability",
+        args.canonical_start_probability,
+        checkpoint.config.canonical_start_probability,
+    )
+    _match(
+        "tabular_stall_seconds",
+        args.tabular_stall_seconds,
+        checkpoint.config.tabular_stall_seconds,
+    )
     return _setup_from_checkpoint(checkpoint)
 
 
 def _setup_from_checkpoint(checkpoint: TrainingCheckpoint) -> _TrainingSetup:
-    if any(len(state) == 6 for state in checkpoint.q_table):
-        raise ValueError("legacy six-value Q-tables can be replayed but cannot resume ten-value training")
+    if checkpoint.config.architecture != TABULAR_ARCHITECTURE or any(
+        len(state) != 7 for state in checkpoint.q_table
+    ):
+        raise ValueError(
+            "this checkpoint uses a previous tabular architecture; it remains replayable, "
+            "but smooth tabular training must start as a fresh run without --resume"
+        )
     return _TrainingSetup(
         seed=checkpoint.seed,
         completed_episode=checkpoint.completed_episode,
@@ -277,6 +346,8 @@ def _setup_from_checkpoint(checkpoint: TrainingCheckpoint) -> _TrainingSetup:
         evaluations=checkpoint.evaluations,
         replays=checkpoint.replays,
         curriculum=checkpoint.curriculum,
+        run_id=checkpoint.run_id,
+        created_at=checkpoint.created_at,
     )
 
 
@@ -298,9 +369,44 @@ def _positive_int(value: str) -> int:
 
 def _bucket_count(value: str) -> int:
     parsed = int(value)
-    if parsed < 2:
-        raise argparse.ArgumentTypeError("must be at least 2")
+    if parsed != 5:
+        raise argparse.ArgumentTypeError("the smooth tabular architecture requires 5")
     return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
+def _probability(value: str) -> float:
+    parsed = float(value)
+    if not 0 <= parsed <= 1:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return parsed
+
+
+def _new_curriculum(seed: int, config: QLearningConfig) -> AdaptiveCurriculum:
+    return AdaptiveCurriculum(
+        Random(seed + 2_000_000),
+        CurriculumConfig(
+            canonical_probability=config.canonical_start_probability,
+            bounded_stages=True,
+        ),
+    )
+
+
+def _stall_steps(config: QLearningConfig) -> int:
+    return max(1, round(config.tabular_stall_seconds / DT))
 
 
 if __name__ == "__main__":
