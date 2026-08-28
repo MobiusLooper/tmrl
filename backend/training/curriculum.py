@@ -20,7 +20,7 @@ class CurriculumConfig:
     canonical_probability: float = 0.25
     initial_floor: float = 0.75
     promotion_window: int = 50
-    promotion_rate: float = 0.60
+    promotion_rate: float = 0.35
 
 
 class AdaptiveCurriculum:
@@ -42,16 +42,17 @@ class AdaptiveCurriculum:
         speed = self.rng.uniform(2.0, 5.0)
         return environment.reset_at_progress(self.last_start_progress, speed=speed)
 
-    def observe(self, lap_completed: bool) -> None:
+    def observe(self, lap_completed: bool) -> bool:
         if self.last_start_progress == 0:
-            return
+            return False
         self._outcomes.append(lap_completed)
         if len(self._outcomes) < self.config.promotion_window:
-            return
+            return False
         if sum(self._outcomes) / len(self._outcomes) < self.config.promotion_rate:
-            return
+            return False
         self.floor = max(0.0, self.floor - 0.25)
         self._outcomes.clear()
+        return True
 
     def snapshot(self) -> dict[str, object]:
         return {"floor": self.floor, "outcomes": list(self._outcomes), "rng_state": self.rng.getstate()}

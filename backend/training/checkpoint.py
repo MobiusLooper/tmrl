@@ -41,6 +41,9 @@ class TrainingCheckpoint:
     evaluations: tuple[EvaluationRecord, ...]
     replays: tuple[EvaluationReplay, ...]
     curriculum: dict[str, object] | None = None
+    training_steps: int = 0
+    epsilon_schedule_start_step: int = 0
+    epsilon_schedule_start_value: float | None = None
 
     def __post_init__(self) -> None:
         if self.completed_episode < 1:
@@ -51,6 +54,8 @@ class TrainingCheckpoint:
             raise CheckpointError("training_wall_time must be finite and non-negative")
         if not isfinite(self.epsilon) or not 0 <= self.epsilon <= 1:
             raise CheckpointError("epsilon must be finite and in [0, 1]")
+        if self.training_steps < 0 or self.epsilon_schedule_start_step < 0:
+            raise CheckpointError("exploration step counters must be non-negative")
         expected_episodes = tuple(range(1, self.completed_episode + 1))
         if tuple(record.episode for record in self.records) != expected_episodes:
             raise CheckpointError("episode history must be complete and contiguous")
@@ -91,7 +96,11 @@ class TrainingCheckpoint:
             self.config,
             q_table=QTable.from_snapshot(self.q_table, bucket_count=self.config.bucket_count),
         )
-        agent.epsilon = self.epsilon
+        agent.restore_exploration(
+            self.training_steps,
+            self.epsilon_schedule_start_step,
+            self.epsilon_schedule_start_value,
+        )
         return agent
 
 
@@ -124,6 +133,9 @@ def checkpoint_from_agent(
         evaluations=evaluations,
         replays=replays,
         curriculum=curriculum,
+        training_steps=agent.training_steps,
+        epsilon_schedule_start_step=agent.epsilon_schedule_start_step,
+        epsilon_schedule_start_value=agent.epsilon_schedule_start_value,
     )
 
 
@@ -204,6 +216,9 @@ def _checkpoint_payload(checkpoint: TrainingCheckpoint) -> dict[str, object]:
         "agent": {
             "config": asdict(checkpoint.config),
             "epsilon": checkpoint.epsilon,
+            "training_steps": checkpoint.training_steps,
+            "epsilon_schedule_start_step": checkpoint.epsilon_schedule_start_step,
+            "epsilon_schedule_start_value": checkpoint.epsilon_schedule_start_value,
             "rng_state": checkpoint.rng_state,
             "q_table": [
                 {"state": state, "values": values}
@@ -253,6 +268,13 @@ def _checkpoint_from_payload(payload: Mapping[str, Any]) -> TrainingCheckpoint:
         evaluations=evaluations,
         replays=replays,
         curriculum=_curriculum_snapshot(run.get("curriculum")),
+        training_steps=_integer(agent.get("training_steps", sum(record.steps for record in records)), "training_steps"),
+        epsilon_schedule_start_step=_integer(
+            agent.get("epsilon_schedule_start_step", 0), "epsilon_schedule_start_step"
+        ),
+        epsilon_schedule_start_value=float(
+            agent.get("epsilon_schedule_start_value", config.epsilon_start)
+        ),
     )
 
 

@@ -51,20 +51,35 @@ def test_q_learning_update_bootstraps_only_non_terminal_transitions() -> None:
     assert agent.q_table.value(state, DiscreteAction.THROTTLE) == pytest.approx(2.65)
 
 
-def test_epsilon_schedule_uses_episode_one_as_start_and_clamps() -> None:
+def test_epsilon_schedule_uses_training_transitions_and_clamps() -> None:
     agent = QLearningAgent(
         Random(0),
-        QLearningConfig(epsilon_start=0.8, epsilon_min=0.2, epsilon_decay=0.5),
+        QLearningConfig(epsilon_start=0.8, epsilon_min=0.2, epsilon_decay_steps=2),
     )
 
     agent.start_episode(1)
     assert agent.epsilon == 0.8
-    agent.start_episode(2)
-    assert agent.epsilon == 0.4
+    agent.update(ZERO_OBSERVATION, DiscreteAction.COAST, 0, NEXT_OBSERVATION, False)
+    assert agent.epsilon == pytest.approx(0.5)
+    agent.update(ZERO_OBSERVATION, DiscreteAction.COAST, 0, NEXT_OBSERVATION, False)
+    assert agent.epsilon == 0.2
     agent.start_episode(20)
     assert agent.epsilon == 0.2
     with pytest.raises(ValueError, match="positive"):
         agent.start_episode(0)
+
+
+def test_epsilon_reheats_and_starts_a_new_transition_schedule() -> None:
+    agent = QLearningAgent(
+        Random(0),
+        QLearningConfig(epsilon_min=0.1, epsilon_reheat=0.3, epsilon_decay_steps=2),
+    )
+    agent.restore_exploration(2)
+    assert agent.epsilon == 0.1
+    agent.reheat_epsilon()
+    assert agent.epsilon == 0.3
+    agent.update(ZERO_OBSERVATION, DiscreteAction.COAST, 0, NEXT_OBSERVATION, False)
+    assert agent.epsilon == pytest.approx(0.2)
 
 
 def test_seeded_exploration_and_greedy_tie_breaking_are_reproducible() -> None:

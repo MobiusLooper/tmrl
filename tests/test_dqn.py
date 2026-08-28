@@ -51,6 +51,16 @@ def test_curriculum_is_seeded_and_promotes_to_canonical() -> None:
     assert first.floor == 0.5
 
 
+def test_default_curriculum_promotes_at_thirty_five_percent() -> None:
+    curriculum = AdaptiveCurriculum(Random(1))
+    curriculum.last_start_progress = 0.75
+    promoted = False
+    for index in range(50):
+        promoted = curriculum.observe(index < 18)
+    assert promoted
+    assert curriculum.floor == 0.5
+
+
 def test_stall_terminates_early_with_explicit_penalty() -> None:
     environment = RacingEnv(stall_steps=2)
     environment.step(DiscreteAction.COAST)

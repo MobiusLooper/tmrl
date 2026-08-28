@@ -40,6 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epsilon-start", type=float)
     parser.add_argument("--epsilon-min", type=float)
     parser.add_argument("--epsilon-decay", type=float)
+    parser.add_argument("--epsilon-decay-steps", type=_positive_int)
+    parser.add_argument("--epsilon-reheat", type=float)
     parser.add_argument("--buckets", type=_bucket_count)
     parser.add_argument(
         "--checkpoint",
@@ -223,8 +225,10 @@ def _training_setup(args: argparse.Namespace) -> _TrainingSetup:
             learning_rate=_value_or(args.learning_rate, 0.1),
             discount=_value_or(args.discount, 0.9995),
             epsilon_start=_value_or(args.epsilon_start, 1.0),
-            epsilon_min=_value_or(args.epsilon_min, 0.05),
+            epsilon_min=_value_or(args.epsilon_min, 0.10),
             epsilon_decay=_value_or(args.epsilon_decay, 0.997),
+            epsilon_decay_steps=_value_or(args.epsilon_decay_steps, 400_000),
+            epsilon_reheat=_value_or(args.epsilon_reheat, 0.30),
             bucket_count=_value_or(args.buckets, 5),
         )
         return _TrainingSetup(
@@ -251,6 +255,8 @@ def _training_setup(args: argparse.Namespace) -> _TrainingSetup:
     _match("epsilon_start", args.epsilon_start, checkpoint.config.epsilon_start)
     _match("epsilon_min", args.epsilon_min, checkpoint.config.epsilon_min)
     _match("epsilon_decay", args.epsilon_decay, checkpoint.config.epsilon_decay)
+    _match("epsilon_decay_steps", args.epsilon_decay_steps, checkpoint.config.epsilon_decay_steps)
+    _match("epsilon_reheat", args.epsilon_reheat, checkpoint.config.epsilon_reheat)
     _match("buckets", args.buckets, checkpoint.config.bucket_count)
     return _setup_from_checkpoint(checkpoint)
 

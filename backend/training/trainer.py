@@ -48,7 +48,8 @@ def run_training_episode(
         if result.done:
             record = _record_terminal_episode(result.info, episode)
             if curriculum is not None:
-                curriculum.observe(record.lap_completed)
+                if curriculum.observe(record.lap_completed):
+                    agent.reheat_epsilon()
             return record
 
 

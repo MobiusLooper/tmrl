@@ -147,7 +147,7 @@ Implemented:
 * ten-value continuous observations with progress, lateral offset and heading error
 * pace- and crossing-speed checkpoint shaping with explicit crash, timeout and stall penalties
 * near-wall-sensitive tabular discretisation and time-calibrated discounting
-* seeded adaptive curriculum that expands backwards to canonical starts
+* transition-based epsilon decay, promotion reheating, and a seeded adaptive curriculum that expands backwards to canonical starts
 * selectable tabular and locally implemented PyTorch Double DQN learners
 * replay buffer, 10-step returns, target network, best-policy retention and resumable DQN state
 * legacy replay compatibility and schema-2 DQN replay manifests

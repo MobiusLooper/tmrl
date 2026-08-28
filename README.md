@@ -61,7 +61,9 @@ The five sensor rays cover relative angles `-60°`, `-30°`, `0°`, `+30°` and 
 
 The learning observation adds normalized lap progress, signed lateral offset, and sine/cosine heading error. Rewards favour first-time checkpoint progress and early, moving checkpoint crossings; re-crossing an old checkpoint cannot farm positive reward. Crashes, 60-second timeouts, and five seconds without new progress all carry explicit terminal penalties. A discount of `0.9995` is calibrated to the simulator's 20 Hz decision rate.
 
-Training uses a seeded backwards curriculum: most early episodes begin on later track checkpoints, while canonical starts remain in the mix. Once recent completion performance is sufficient, the starting floor moves from 75% to 50%, 25%, and finally canonical-only training. Greedy evaluation always starts from the original grid at zero speed.
+Training uses a seeded backwards curriculum: most early episodes begin on later track checkpoints, while canonical starts remain in the mix. Once at least 35% of the latest 50 curriculum starts complete the remaining lap, the starting floor moves from 75% to 50%, 25%, and finally canonical-only training. Greedy evaluation always starts from the original grid at zero speed.
+
+Tabular exploration decays linearly by environment transitions rather than episodes, so short curriculum episodes do not exhaust exploration prematurely. The default schedule moves epsilon from `1.0` to `0.10` over 400,000 training transitions. Each curriculum promotion reheats epsilon to at least `0.30` and starts a fresh decay window for the newly introduced track section. Existing ten-value checkpoints migrate by deriving their transition count from episode history.
 
 Python dependencies are installed automatically into an isolated environment by `uv`.
 
@@ -88,6 +90,8 @@ Run the enhanced tabular learner with ten-episode greedy evaluation every 50 epi
 ```bash
 uv run python -m backend.training.train --algorithm tabular --episodes 3000 --seed 0
 ```
+
+The exploration schedule can be changed with `--epsilon-decay-steps`, `--epsilon-min`, and `--epsilon-reheat`.
 
 Run the PyTorch Double DQN learner:
 
