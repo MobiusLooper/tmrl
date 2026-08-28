@@ -4,16 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#101511" />
-    <title>RL Racer — Sensor Sandbox</title>
+    <title>RL Racer — Training Replay</title>
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Milestone 02</p>
-          <h1>Sensor Sandbox</h1>
+          <p class="eyebrow">Milestone 06</p>
+          <h1>RL Racer</h1>
         </div>
-        <div class="connection" id="connection"><span></span> Connecting</div>
+        <div class="topbar-actions">
+          <div class="mode-switch" aria-label="Driving mode">
+            <button class="active" id="manual-mode" type="button">Manual</button>
+            <button id="replay-mode" type="button">Agent Replay</button>
+          </div>
+          <div class="connection" id="connection"><span></span> Connecting</div>
+        </div>
       </header>
 
       <section class="game-card">
@@ -21,9 +27,9 @@
 
         <div class="hud" aria-live="polite">
           <div class="metric speed"><span>Speed</span><strong id="speed">0.0</strong><small>/ 12</small></div>
-          <div class="metric"><span>Lap</span><strong id="lap">1</strong></div>
+          <div class="metric"><span id="lap-label">Lap</span><strong id="lap">1</strong></div>
           <div class="metric wide"><span>Time</span><strong id="time">00:00.0</strong></div>
-          <div class="metric wide"><span>Best</span><strong id="best">—</strong></div>
+          <div class="metric wide"><span id="best-label">Best</span><strong id="best">—</strong></div>
         </div>
 
         <aside class="sensor-panel" aria-label="Normalized distance sensor readings">
@@ -52,10 +58,41 @@
           <p>Press <kbd>R</kbd> or Space to restart.</p>
         </div>
 
+        <div class="replay-empty" id="replay-empty">
+          <p class="eyebrow">No replay yet</p>
+          <h2>Train a policy first.</h2>
+          <p id="replay-empty-detail">The latest checkpoint will appear here when an evaluation finishes.</p>
+          <button id="empty-reload" type="button">Reload latest</button>
+        </div>
+
+        <aside class="replay-summary" id="replay-summary" aria-live="polite">
+          <p>Evaluation checkpoint</p>
+          <strong id="replay-episode">—</strong>
+          <span id="replay-result">—</span>
+        </aside>
+
         <button class="restart" id="restart" type="button" title="Restart (R or Space)">
           <span>↻</span> Restart
         </button>
         <div class="controls-hint"><b>↑ / W</b> throttle <b>↓ / S</b> brake <b>← → / A D</b> steer</div>
+
+        <div class="replay-controls" id="replay-controls">
+          <div class="replay-buttons">
+            <button id="replay-previous" type="button" title="Previous checkpoint">←</button>
+            <button class="primary" id="replay-play" type="button">Play</button>
+            <button id="replay-next" type="button" title="Next checkpoint">→</button>
+            <button id="replay-all" type="button">Play all</button>
+          </div>
+          <input id="replay-timeline" type="range" min="0" max="1" value="0" aria-label="Replay timeline">
+          <select id="replay-select" aria-label="Evaluation checkpoint"></select>
+          <select id="replay-rate" aria-label="Playback speed">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="5">5×</option>
+            <option value="10">10×</option>
+          </select>
+          <button id="replay-reload" type="button" title="Reload latest replay">↻</button>
+        </div>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

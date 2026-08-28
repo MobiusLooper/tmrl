@@ -1,6 +1,14 @@
+from pathlib import Path
+from random import Random
+
 from fastapi.testclient import TestClient
 
+import backend.api.server as server_module
+from backend.env.environment import RacingEnv
+from backend.rl import QLearningAgent
 from backend.api.server import app
+from backend.training.checkpoint import checkpoint_from_agent, save_checkpoint
+from backend.training.trainer import run_training
 
 
 client = TestClient(app)
@@ -53,3 +61,63 @@ def test_websocket_sessions_are_isolated() -> None:
         second_state = second.receive_json()
         assert first_state["speed"] > 0
         assert second_state["speed"] == 0
+
+
+def test_replay_catalog_latest_and_episode_endpoints(tmp_path: Path, monkeypatch) -> None:
+    checkpoint_path = _write_replay_checkpoint(tmp_path)
+    monkeypatch.setattr(server_module, "CHECKPOINT_PATH", checkpoint_path)
+
+    catalog = client.get("/api/replays")
+    assert catalog.status_code == 200
+    assert catalog.json()["schema_version"] == 1
+    assert catalog.json()["latest_training_episode"] == 1
+    assert catalog.json()["replays"][0]["training_episode"] == 1
+
+    latest = client.get("/api/replays/latest")
+    selected = client.get("/api/replays/1")
+    assert latest.status_code == selected.status_code == 200
+    assert latest.json() == selected.json()
+    assert latest.json()["steps"] == 1
+    assert len(latest.json()["transitions"][0]["q_values"]) == 9
+    assert client.get("/api/replays/999").status_code == 404
+
+
+def test_replay_endpoints_distinguish_missing_and_invalid_checkpoints(tmp_path: Path, monkeypatch) -> None:
+    missing = tmp_path / "missing.json"
+    monkeypatch.setattr(server_module, "CHECKPOINT_PATH", missing)
+    assert client.get("/api/replays").status_code == 404
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("not json", encoding="utf-8")
+    monkeypatch.setattr(server_module, "CHECKPOINT_PATH", invalid)
+    response = client.get("/api/replays")
+    assert response.status_code == 503
+    assert "invalid" in response.json()["detail"]
+
+
+def _write_replay_checkpoint(tmp_path: Path) -> Path:
+    agent = QLearningAgent(Random(2))
+    result = run_training(
+        RacingEnv(max_steps=1),
+        agent,
+        1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        evaluation_seed=8,
+        record_replays=True,
+    )
+    checkpoint = checkpoint_from_agent(
+        agent,
+        seed=2,
+        completed_episode=1,
+        evaluate_every=1,
+        evaluation_episodes=1,
+        evaluation_seed=8,
+        training_wall_time=result.training_wall_time,
+        records=result.records,
+        evaluations=result.evaluations,
+        replays=result.replays,
+    )
+    path = tmp_path / "latest.json"
+    save_checkpoint(checkpoint, path)
+    return path

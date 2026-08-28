@@ -10,27 +10,27 @@ from backend.env.environment import DiscreteAction, Observation, RacingEnv, Step
 from backend.rl import GreedyPolicy, QLearningAgent, QLearningConfig, StateDiscretizer
 from backend.training import evaluate_policy, run_training, run_training_episode
 
-ZERO_OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-NEXT_OBSERVATION: Observation = (0.3, 0.3, 0.3, 0.3, 0.3, 0.3)
+ZERO_OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+NEXT_OBSERVATION: Observation = (0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.0, 1.0)
 
 
 def test_discretizer_clamps_values_and_handles_bucket_boundaries() -> None:
-    observation: Observation = (-0.1, 0.1999, 0.2, 0.7999, 0.8, 1.2)
+    observation: Observation = (-0.1, 0.039, 0.04, 0.3, 1.0, 1.2, 1.2, -1.2, 0.0, 1.0)
 
-    assert StateDiscretizer(5).discretize(observation) == (0, 0, 1, 3, 4, 4)
-    assert StateDiscretizer(5).discretize((1.0,) * 6) == (4, 4, 4, 4, 4, 4)
+    assert StateDiscretizer(5).discretize(observation) == (0, 0, 1, 4, 5, 4, 19, 0, 4)
+    assert StateDiscretizer(5).discretize((1.0,) * 10) == (5, 5, 5, 5, 5, 4, 19, 4, 5)
 
 
 @pytest.mark.parametrize("value", [nan, inf, -inf])
 def test_discretizer_rejects_non_finite_values(value: float) -> None:
     with pytest.raises(ValueError, match="finite"):
-        StateDiscretizer().discretize((value, 0, 0, 0, 0, 0))
+        StateDiscretizer().discretize((value, 0, 0, 0, 0, 0, 0, 0, 0, 1))
 
 
 def test_discretizer_validates_shape_and_bucket_count() -> None:
     with pytest.raises(ValueError, match="at least 2"):
         StateDiscretizer(1)
-    with pytest.raises(ValueError, match="six"):
+    with pytest.raises(ValueError, match="ten"):
         StateDiscretizer().discretize((0.0,) * 5)
 
 
@@ -98,7 +98,7 @@ class TwoStepEnvironment:
         del action
         self.step_number += 1
         done = self.step_number == 2
-        observation = NEXT_OBSERVATION if not done else (0.7,) * 6
+        observation = NEXT_OBSERVATION if not done else (0.7,) * 10
         return StepResult(
             observation=observation,
             reward=float(self.step_number),

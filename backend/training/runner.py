@@ -41,6 +41,7 @@ class RunSummary:
     lap_completions: int
     crash_count: int
     timeout_count: int
+    stalled_count: int
 
 
 ProgressCallback = Callable[[EpisodeRecord, int, float], None]
@@ -111,4 +112,5 @@ def summarize_run(records: list[EpisodeRecord], *, seed: int, wall_time: float) 
         lap_completions=sum(record.lap_completed for record in records),
         crash_count=sum(record.termination_reason == "crash" for record in records),
         timeout_count=sum(record.termination_reason == "timeout" for record in records),
+        stalled_count=sum(record.termination_reason == "stalled" for record in records),
     )

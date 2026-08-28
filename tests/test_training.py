@@ -10,7 +10,7 @@ from backend.training.agents import RandomAgent
 from backend.training.runner import EpisodeRecord, run_episode, run_episodes, summarize_run
 
 
-OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+OBSERVATION: Observation = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
 
 
 @dataclass
@@ -18,7 +18,7 @@ class ScriptedAgent:
     action: DiscreteAction = DiscreteAction.COAST
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
-        assert len(observation) == 6
+        assert len(observation) == 10
         return self.action
 
 
@@ -60,7 +60,7 @@ def test_random_agent_is_seeded_and_uniform_over_action_space() -> None:
     assert set(first_actions) <= set(DiscreteAction)
 
 
-@pytest.mark.parametrize("reason", ["crash", "lap", "timeout"])
+@pytest.mark.parametrize("reason", ["crash", "lap", "timeout", "stalled"])
 def test_runner_records_every_terminal_reason(reason: str) -> None:
     record = run_episode(TerminalEnvironment(reason), ScriptedAgent(), episode=4)
 
@@ -104,6 +104,7 @@ def test_summary_aggregates_hand_checked_records() -> None:
     assert summary.lap_completions == 1
     assert summary.crash_count == 1
     assert summary.timeout_count == 1
+    assert summary.stalled_count == 0
 
 
 def test_runner_and_summary_reject_empty_runs() -> None:

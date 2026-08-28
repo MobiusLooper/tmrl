@@ -58,6 +58,12 @@ class RacingSimulation:
         self.lap_started = False
         return self.snapshot()
 
+    def reset_pose(self, position: Point, heading: float, speed: float = 0.0) -> dict[str, object]:
+        """Reset episode physics at a deterministic curriculum pose."""
+        self.reset(clear_best=False)
+        self.car = CarState(position.x, position.y, heading, max(0.0, min(MAX_SPEED, speed)))
+        return self.snapshot()
+
     def step(self, action: Action) -> dict[str, object]:
         if self.crashed:
             return self.snapshot()

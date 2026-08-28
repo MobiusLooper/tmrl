@@ -14,10 +14,10 @@ ACTIONS = tuple(DiscreteAction)
 @dataclass(frozen=True, slots=True)
 class QLearningConfig:
     learning_rate: float = 0.1
-    discount: float = 0.99
+    discount: float = 0.9995
     epsilon_start: float = 1.0
     epsilon_min: float = 0.05
-    epsilon_decay: float = 0.995
+    epsilon_decay: float = 0.997
     bucket_count: int = 5
 
     def __post_init__(self) -> None:
@@ -92,6 +92,9 @@ class GreedyPolicy:
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
         return _choose_max_action(self.agent.q_values(observation), self.rng)
+
+    def q_values(self, observation: Observation) -> tuple[float, ...]:
+        return self.agent.q_values(observation)
 
 
 def _choose_max_action(values: tuple[float, ...], rng: Random) -> DiscreteAction:

@@ -5,6 +5,8 @@ description = "A playable reinforcement-learning racing sandbox"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1",
+    "numpy>=2,<3",
+    "torch>=2.6,<3",
     "uvicorn[standard]>=0.34,<1",
 ]
 

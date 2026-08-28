@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from math import isfinite
+from typing import Mapping, Sequence
+
 from backend.env.environment import DiscreteAction
 
 from .discretisation import DiscreteState
@@ -30,3 +33,25 @@ class QTable:
 
     def snapshot(self) -> dict[DiscreteState, tuple[float, ...]]:
         return {state: tuple(values) for state, values in self._rows.items()}
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: Mapping[Sequence[int], Sequence[float]],
+        *,
+        bucket_count: int,
+    ) -> QTable:
+        if bucket_count < 2:
+            raise ValueError("bucket_count must be at least 2")
+        table = cls()
+        for raw_state, raw_values in snapshot.items():
+            state = tuple(raw_state)
+            values = tuple(float(value) for value in raw_values)
+            if len(state) not in {6, 9} or any(
+                not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in state
+            ):
+                raise ValueError("Q-table states must contain six legacy or nine current bucket indices")
+            if len(values) != ACTION_COUNT or any(not isfinite(value) for value in values):
+                raise ValueError(f"Q-table rows must contain {ACTION_COUNT} finite values")
+            table._rows[state] = list(values)
+        return table

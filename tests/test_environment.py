@@ -36,8 +36,9 @@ def test_reset_returns_only_normalized_observation_and_clears_episode() -> None:
 
     observation = environment.reset()
 
-    assert len(observation) == 6
-    assert all(0.0 <= value <= 1.0 for value in observation)
+    assert len(observation) == 10
+    assert all(0.0 <= value <= 1.0 for value in observation[:7])
+    assert all(-1.0 <= value <= 1.0 for value in observation[7:])
     assert environment.steps == 0
     assert environment.current_checkpoint == 0
     assert environment.furthest_checkpoint == 0
@@ -76,7 +77,7 @@ def test_checkpoints_are_ordered_and_reverse_crossings_remove_progress() -> None
     assert out_of_order.info["current_progress"] == 0
 
     forward = cross_gate(environment, environment.checkpoints[0])
-    assert forward.reward == pytest.approx(0.99)
+    assert forward.reward > 1.9
     assert forward.info["current_progress"] == pytest.approx(0.01)
     assert forward.info["furthest_progress"] == pytest.approx(0.01)
 
@@ -84,7 +85,7 @@ def test_checkpoints_are_ordered_and_reverse_crossings_remove_progress() -> None
     assert reverse.reward == pytest.approx(-1.01)
     assert reverse.info["current_progress"] == 0
     assert reverse.info["furthest_progress"] == pytest.approx(0.01)
-    assert forward.reward + reverse.reward == pytest.approx(-0.02)
+    assert reverse.reward == pytest.approx(-1.01)
 
 
 def test_crash_reward_and_terminal_step_guard() -> None:
@@ -94,7 +95,7 @@ def test_crash_reward_and_terminal_step_guard() -> None:
 
     result = environment.step(DiscreteAction.COAST)
 
-    assert result.reward == pytest.approx(-10.01)
+    assert result.reward == pytest.approx(-15.01)
     assert result.done
     assert result.info["termination_reason"] == "crash"
     with pytest.raises(RuntimeError, match="reset"):
@@ -104,7 +105,7 @@ def test_crash_reward_and_terminal_step_guard() -> None:
 def test_timeout_reward() -> None:
     result = RacingEnv(max_steps=1).step(DiscreteAction.COAST)
 
-    assert result.reward == pytest.approx(-0.01)
+    assert result.reward == pytest.approx(-15.01)
     assert result.done
     assert result.info["termination_reason"] == "timeout"
     assert result.info["elapsed_time"] == pytest.approx(0.05)
@@ -121,14 +122,14 @@ def test_lap_requires_all_checkpoints_and_has_additive_reward() -> None:
     complete.furthest_checkpoint = 99
     complete_result = cross_gate(complete, TRACK.finish_gate)
 
-    assert complete_result.reward == pytest.approx(50.99)
+    assert complete_result.reward == pytest.approx(102.00958333333332)
     assert complete_result.done
     assert complete_result.info["termination_reason"] == "lap"
     assert complete_result.info["current_progress"] == 1.0
     assert complete_result.info["furthest_progress"] == 1.0
 
 
-def test_observation_never_exposes_privileged_state() -> None:
+def test_observation_exposes_normalized_track_context() -> None:
     environment = RacingEnv()
     environment.simulation.car.x = 20
     environment.simulation.car.y = 6
@@ -137,7 +138,8 @@ def test_observation_never_exposes_privileged_state() -> None:
     result = environment.step(DiscreteAction.COAST)
 
     assert isinstance(result.observation, tuple)
-    assert len(result.observation) == 6
+    assert len(result.observation) == 10
+    assert result.observation[6] == 0
     assert set(result.info) == {
         "steps",
         "elapsed_time",

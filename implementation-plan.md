@@ -119,19 +119,20 @@ Success criterion met:
 
 ---
 
-## Milestone 6 — Evaluation playback
+## Milestone 6 — Evaluation playback ✅
 
-Next milestone.
+Implemented:
 
-Persist training checkpoints containing the Q-table, configuration, episode number and metric history.
-
-Allow interrupted headless training runs to resume from those checkpoints.
-
-Record selected greedy evaluation trajectories with position, heading, speed, sensors, action, reward and Q-values for every frame.
-
-Expose the latest recorded trajectory and its evaluation metadata to the frontend.
-
-Animate trajectories on Canvas independently of ongoing training.
+* versioned, human-readable JSON checkpoints with atomic replacement
+* exact Q-table, metric-history and training-random-state restoration
+* total-target resume semantics and graceful episode-boundary interruption
+* best-run trajectory selection at every greedy evaluation checkpoint
+* recorded physical states, sensors, actions, rewards and Q-values
+* replay catalog, latest and per-checkpoint HTTP endpoints
+* shared manual/replay Canvas rendering with independent client-side timing
+* pause, restart, scrub, checkpoint navigation and 1×/2×/5×/10× playback
+* chronological Play All mode for watching the learnt policy develop
+* checkpoint, resumption, trajectory-selection and browser API tests
 
 Success criterion:
 
@@ -139,7 +140,25 @@ Success criterion:
 
 ---
 
-## Milestone 7 — Training dashboard
+## Milestone 7 — Full-lap learning architecture 🟡
+
+Implemented:
+
+* ten-value continuous observations with progress, lateral offset and heading error
+* pace- and crossing-speed checkpoint shaping with explicit crash, timeout and stall penalties
+* near-wall-sensitive tabular discretisation and time-calibrated discounting
+* seeded adaptive curriculum that expands backwards to canonical starts
+* selectable tabular and locally implemented PyTorch Double DQN learners
+* replay buffer, 10-step returns, target network, best-policy retention and resumable DQN state
+* legacy replay compatibility and schema-2 DQN replay manifests
+
+Implementation is complete; the long-running acceptance benchmark remains:
+
+> A fresh seed-0 DQN run must produce a greedy canonical lap within 60 simulated seconds and one million training transitions.
+
+---
+
+## Milestone 8 — Training dashboard
 
 Add:
 
@@ -155,7 +174,7 @@ Add:
 
 ---
 
-## Milestone 8 — Experiment controls
+## Milestone 9 — Experiment controls
 
 Expose RL and reward parameters.
 
