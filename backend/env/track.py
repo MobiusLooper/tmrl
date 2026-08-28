@@ -22,6 +22,9 @@ class Gate:
         lateral_offset = abs((current - self.center).dot(normal))
         return crossed_forward and lateral_offset <= half_width
 
+    def contains_reverse_crossing(self, previous: Point, current: Point, half_width: float) -> bool:
+        return self.contains_crossing(current, previous, half_width)
+
 
 @dataclass(frozen=True, slots=True)
 class Track:
@@ -75,6 +78,53 @@ def _make_gate(centerline: tuple[Point, ...], index: int, half_width: float) -> 
         start=center + normal * (half_width + margin),
         end=center - normal * (half_width + margin),
     )
+
+
+def progress_gates(track: Track, intervals: int = 100) -> tuple[Gate, ...]:
+    """Return ordered gates at equal arc-length fractions, excluding the finish."""
+    if intervals < 2:
+        raise ValueError("intervals must be at least 2")
+
+    points = track.centerline
+    segments: list[tuple[Point, Point, float]] = []
+    total_length = 0.0
+    for index, start in enumerate(points):
+        end = points[(index + 1) % len(points)]
+        length = (end - start).length
+        if length == 0:
+            continue
+        segments.append((start, end, length))
+        total_length += length
+    if total_length == 0:
+        raise ValueError("track centreline must have positive length")
+
+    gates: list[Gate] = []
+    segment_index = 0
+    distance_before_segment = 0.0
+    for checkpoint in range(1, intervals):
+        target_distance = total_length * checkpoint / intervals
+        while (
+            segment_index < len(segments) - 1
+            and distance_before_segment + segments[segment_index][2] < target_distance
+        ):
+            distance_before_segment += segments[segment_index][2]
+            segment_index += 1
+
+        start, end, length = segments[segment_index]
+        amount = (target_distance - distance_before_segment) / length
+        tangent = (end - start).normalized()
+        center = start + (end - start) * amount
+        normal = Point(-tangent.y, tangent.x)
+        margin = 0.12
+        gates.append(
+            Gate(
+                center=center,
+                tangent=tangent,
+                start=center + normal * (track.half_width + margin),
+                end=center - normal * (track.half_width + margin),
+            )
+        )
+    return tuple(gates)
 
 
 def build_track() -> Track:

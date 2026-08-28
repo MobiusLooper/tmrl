@@ -4,7 +4,7 @@ A browser-based reinforcement-learning racing demo, built from scratch to make t
 
 ## Current status
 
-Milestones 1 and 2 are complete. The project currently includes:
+Milestones 1 through 4 are complete. The project currently includes:
 
 * a playable go-kart circuit with a chicane, hairpin and straights
 * deterministic Python car physics and track collision detection
@@ -14,9 +14,12 @@ Milestones 1 and 2 are complete. The project currently includes:
 * five live distance sensors rendered as rays with normalized numeric readings
 * a reusable six-value observation containing sensor distances and speed
 * exact, efficient sensor intersections against the track corridor geometry
-* automated tests for physics, geometry, sensors and the browser-facing API
+* a deterministic `reset()` / `step()` environment with nine discrete actions
+* ordered lap-progress checkpoints, configurable rewards and terminal outcomes
+* a reusable headless episode runner and seeded random-policy baseline
+* automated tests for physics, geometry, sensors, environment, training and the browser-facing API
 
-Milestone 3, the reinforcement-learning environment API, is next. Learning and the training dashboard follow in later milestones.
+Milestone 5, tabular Q-learning, is next. There is not yet a trained agent: the current agent chooses every action randomly and retains no knowledge between episodes. Evaluation playback and the training dashboard follow in later milestones.
 
 See [plan.md](plan.md) for the product and technical design, and [implementation-plan.md](implementation-plan.md) for the milestone roadmap.
 
@@ -45,6 +48,16 @@ Python dependencies are installed automatically into an isolated environment by 
 ```bash
 npm test
 ```
+
+## Random baseline
+
+Run the deterministic 1,000-episode reference baseline headlessly:
+
+```bash
+uv run python -m backend.training.random_baseline --episodes 1000 --seed 0 --report-every 100
+```
+
+The command reports progress and finishes with aggregate reward, lap progress, terminal outcomes and throughput metrics. It does not retain frame-by-frame trajectories; browser playback of recorded evaluation runs is planned for Milestone 6.
 
 ## Production build
 

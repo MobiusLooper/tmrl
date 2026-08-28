@@ -38,37 +38,52 @@ Success criterion met:
 
 ---
 
-## Milestone 3 — Environment API
+## Milestone 3 — Environment API ✅
 
-Next milestone.
+Implemented:
 
-Wrap the simulation behind:
+* deterministic `RacingEnv.reset()` and `step()` interface
+* stable nine-action discrete action space
+* equal-distance ordered checkpoints with forward and reverse progress
+* additive step, checkpoint, crash and lap rewards
+* crash, validated-lap and 1,200-step timeout termination
+* typed observations, results and environment information
+* focused determinism, reward, progress and termination tests
 
-```python
-reset()
-step(action)
-```
+Success criterion met:
 
-Add:
-
-* rewards
-* checkpoints
-* episode termination
-* lap progress
-
-Write tests for deterministic physics.
+> Fixed action sequences produce deterministic observations, rewards, progress and termination while manual browser play remains unchanged.
 
 ---
 
-## Milestone 4 — Random agent
+## Milestone 4 — Random agent ✅
 
-Create an agent that picks random actions.
+Implemented:
 
-Run thousands of episodes headlessly.
+* minimal agent protocol and seeded uniformly random agent
+* reusable synchronous episode runner
+* deterministic per-episode records and aggregate run metrics
+* headless random-baseline command with periodic throughput reporting
+* reproducibility, terminal-outcome, runner and aggregation tests
 
-Record metrics.
+Seed `0`, 1,000-episode baseline:
 
-This validates the full training loop before implementing learning.
+```text
+total steps       323,906
+steps/second      233.2
+mean return       -10.55106
+mean progress     2.609%
+best progress     14%
+crashes           992
+timeouts          8
+completed laps    0
+```
+
+Success criterion met:
+
+> One command runs 1,000 deterministic random-policy episodes headlessly and produces the reference baseline that Q-learning must beat.
+
+These episodes do not train an agent or retain trajectories. Learning begins in Milestone 5, and recorded browser playback follows in Milestone 6.
 
 ---
 
@@ -90,7 +105,7 @@ Success criterion:
 
 ## Milestone 6 — Evaluation playback
 
-Record evaluation trajectories.
+Record selected evaluation trajectories from the current policy.
 
 Send them to the frontend.
 
