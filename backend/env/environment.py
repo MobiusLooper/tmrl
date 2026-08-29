@@ -47,6 +47,7 @@ class RewardConfig:
     step: float = -0.01
     checkpoint: float = 1.0
     pace: float = 1.0
+    pace_floor: float = 0.0
     checkpoint_speed: float = 0.25
     reverse_checkpoint: float = -1.0
     crash: float = -15.0
@@ -55,6 +56,10 @@ class RewardConfig:
     lap: float = 100.0
     target_lap_time: float = 40.0
     start_allowance: float = 2.0
+
+    def __post_init__(self) -> None:
+        if not -1.0 <= self.pace_floor <= 0.0:
+            raise ValueError("pace_floor must be in [-1, 0]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +194,7 @@ class RacingEnv:
             self.rewards.target_lap_time - self.rewards.start_allowance
         ) * progress
         elapsed = self.steps * DT
-        pace = max(0.0, min(1.0, (deadline - elapsed) / deadline))
+        pace = max(self.rewards.pace_floor, min(1.0, (deadline - elapsed) / deadline))
         speed = self.simulation.car.speed / MAX_SPEED
         return self.rewards.checkpoint + self.rewards.pace * pace + self.rewards.checkpoint_speed * speed
 

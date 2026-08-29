@@ -151,23 +151,24 @@ Implemented:
 * selectable tabular and locally implemented PyTorch Double DQN learners
 * replay buffer, 10-step returns, target network, best-policy retention and resumable DQN state
 * legacy replay compatibility and schema-2 DQN replay manifests
-* a fresh `tabular-local-v5` path with an eight-part, 583,200-state upper bound based on local lateral and heading context rather than absolute progress sectors
+* a fresh `tabular-local-v6` path with an eight-part, 583,200-state upper bound based on local lateral and heading context rather than absolute progress sectors
 * all nine tabular actions active at normal speed, including simultaneous brake-and-steer control
+* signed, bounded checkpoint pace shaping and a stronger timeout penalty for tabular learning, without changing DQN reward semantics
 * 10 Hz tabular decisions over unchanged 20 Hz physics, with two-frame discounted updates
 * deterministic sticky action selection for learned rows, safe unseen-state defaults, and low-speed propulsive action constraints
 * 50% canonical curriculum sampling with bounded stage bands and a ten-second tabular stall limit
 * architecture-aware checkpoint rejection for old Q-tables while retaining their browser replays
 * canonical terminal-rate and replay steering-smoothness benchmark metrics
 
-Implementation is complete. The DQN benchmark and a fresh Local-v5 acceptance run remain:
+Implementation is complete. The DQN benchmark and a fresh Local-v6 acceptance run remain:
 
 > A fresh seed-0 DQN run must produce a greedy canonical lap within 60 simulated seconds and one million training transitions.
 
-> A fresh seed-0 Local-v5 run must exceed the previous 61% canonical best progress within 3,000 episodes, then complete a canonical lap within 60 simulated seconds while averaging no more than two steering-state changes per second in its best replay.
+> A fresh seed-0 Local-v6 run must exceed the previous 77% canonical best progress within 3,000 episodes, then complete a canonical lap within 60 simulated seconds while averaging no more than two steering-state changes per second in its best replay.
 
 The fresh seed-0 Local-v4 run completed all 3,000 episodes with 68 exploratory training laps and zero stalls across 600 greedy evaluations. Its best greedy checkpoint reached 55% with 4.42 steering changes per second and no completed lap, so the liveness objective passed but the progress, lap, and smoothness acceptance criteria remain unmet.
 
-Local-v5 enables simultaneous brake-and-steer actions and requires a fresh acceptance run; Local-v4 checkpoints remain replayable but cannot resume because their active-action semantics differ.
+Local-v5 enabled simultaneous brake-and-steer actions but learnt a conservative route that reached 77% by the 60-second limit and completed the lap only when replayed with a longer 74.95-second limit. Local-v6 keeps those controls while making late checkpoint pace negative, doubling the timeout penalty to `-30`, and requiring a fresh run. Local-v4 and Local-v5 checkpoints remain replayable but cannot resume.
 
 ---
 

@@ -4,7 +4,14 @@ import pytest
 import torch
 
 from backend.env.environment import DiscreteAction, RacingEnv
-from backend.rl.dqn import DQNAgent, DQNConfig, DQNPolicy, QNetwork
+from backend.rl.dqn import (
+    DQN_ACTIONS,
+    LOW_SPEED_DQN_ACTIONS,
+    DQNAgent,
+    DQNConfig,
+    DQNPolicy,
+    QNetwork,
+)
 from backend.training.curriculum import AdaptiveCurriculum, CurriculumConfig
 
 
@@ -36,12 +43,82 @@ def test_dqn_policy_is_greedy_and_snapshot_restores() -> None:
     assert restored.q_values(OBSERVATION) == pytest.approx(agent.q_values(OBSERVATION))
 
 
+def test_dqn_exploration_uses_only_propulsive_actions_below_low_speed_threshold() -> None:
+    config = DQNConfig(epsilon_start=1, epsilon_min=1, warmup_steps=100)
+    agent = DQNAgent(Random(12), config, seed=12)
+    low_speed = (*OBSERVATION[:7], 0.049, *OBSERVATION[8:])
+    moving = (*OBSERVATION[:7], 0.05, *OBSERVATION[8:])
+
+    assert set(agent.choose_action(low_speed) for _ in range(500)) == set(
+        LOW_SPEED_DQN_ACTIONS
+    )
+    assert set(agent.choose_action(moving) for _ in range(500)) == set(DQN_ACTIONS)
+
+
+def test_dqn_greedy_policy_ignores_high_non_propulsive_value_at_low_speed() -> None:
+    agent = DQNAgent(Random(3), DQNConfig(epsilon_start=0, epsilon_min=0), seed=3)
+    final_layer = agent.online.layers[-1]
+    assert isinstance(final_layer, torch.nn.Linear)
+    with torch.no_grad():
+        final_layer.weight.zero_()
+        final_layer.bias.zero_()
+        final_layer.bias[int(DiscreteAction.BRAKE)] = 100
+        final_layer.bias[int(DiscreteAction.RIGHT_THROTTLE)] = 4
+    low_speed = (*OBSERVATION[:7], 0.0, *OBSERVATION[8:])
+    moving = (*OBSERVATION[:7], 0.05, *OBSERVATION[8:])
+
+    assert DQNPolicy(agent).choose_action(low_speed) == DiscreteAction.RIGHT_THROTTLE
+    assert DQNPolicy(agent).choose_action(moving) == DiscreteAction.BRAKE
+
+
+def test_dqn_bootstrap_ignores_high_non_propulsive_value_at_low_speed() -> None:
+    config = DQNConfig(
+        learning_rate=1e-3,
+        discount=1,
+        batch_size=1,
+        warmup_steps=1,
+        n_step=1,
+        target_sync_steps=100,
+    )
+    agent = DQNAgent(Random(4), config, seed=4)
+    for network in (agent.online, agent.target):
+        final_layer = network.layers[-1]
+        assert isinstance(final_layer, torch.nn.Linear)
+        with torch.no_grad():
+            for parameter in network.parameters():
+                parameter.zero_()
+            final_layer.bias[int(DiscreteAction.BRAKE)] = 100
+            final_layer.bias[int(DiscreteAction.LEFT_THROTTLE)] = 4
+    low_speed = (*OBSERVATION[:7], 0.0, *OBSERVATION[8:])
+
+    loss = agent.observe(
+        OBSERVATION,
+        DiscreteAction.THROTTLE,
+        0,
+        low_speed,
+        False,
+    )
+
+    assert loss == pytest.approx(3.5)
+
+
 def test_legacy_five_ray_snapshot_requires_a_fresh_dqn_run() -> None:
     snapshot = DQNAgent(Random(2), DQNConfig(warmup_steps=100), seed=2).snapshot()
     snapshot["observation_size"] = 10
 
     with pytest.raises(ValueError, match="seven-ray architecture requires 12"):
         DQNAgent.from_snapshot(snapshot)
+
+
+def test_existing_seven_ray_snapshot_inherits_low_speed_mask() -> None:
+    snapshot = DQNAgent(Random(2), DQNConfig(warmup_steps=100), seed=2).snapshot()
+    config = snapshot["config"]
+    assert isinstance(config, dict)
+    config.pop("low_speed_threshold")
+
+    restored = DQNAgent.from_snapshot(snapshot)
+
+    assert restored.config.low_speed_threshold == 0.05
 
 
 def test_curriculum_is_seeded_and_promotes_to_canonical() -> None:

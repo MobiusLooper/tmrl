@@ -56,7 +56,7 @@ def test_checkpoint_round_trip_restores_complete_agent_and_history(tmp_path: Pat
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert restored == checkpoint
-    assert payload["agent"]["config"]["architecture"] == "tabular-local-v5"
+    assert payload["agent"]["config"]["architecture"] == "tabular-local-v6"
     assert payload["agent"]["config"]["action_repeat"] == 2
     assert payload["agent"]["config"]["sticky_tolerance"] == 0.03
     restored_agent = restored.restore_agent()
@@ -369,7 +369,10 @@ def test_smooth_v3_checkpoint_is_replayable_but_cannot_resume(tmp_path: Path) ->
         _training_setup(parser.parse_args(["--resume", str(path), "--episodes", "2"]))
 
 
-def test_local_v4_checkpoint_is_replayable_but_cannot_resume(tmp_path: Path) -> None:
+@pytest.mark.parametrize("architecture", ["tabular-local-v4", "tabular-local-v5"])
+def test_previous_local_checkpoint_is_replayable_but_cannot_resume(
+    tmp_path: Path, architecture: str
+) -> None:
     agent = QLearningAgent(Random(10))
     result = run_training(
         RacingEnv(max_steps=2),
@@ -391,10 +394,10 @@ def test_local_v4_checkpoint_is_replayable_but_cannot_resume(tmp_path: Path) -> 
         evaluations=result.evaluations,
         replays=result.replays,
     )
-    path = tmp_path / "local-v4.json"
+    path = tmp_path / f"{architecture}.json"
     save_checkpoint(checkpoint, path)
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["agent"]["config"]["architecture"] = "tabular-local-v4"
+    payload["agent"]["config"]["architecture"] = architecture
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     _, algorithm, replays = load_checkpoint_replays(path)

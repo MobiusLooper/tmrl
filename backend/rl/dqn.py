@@ -11,6 +11,13 @@ from backend.env.environment import DiscreteAction, Observation
 from backend.env.sensors import SENSOR_COUNT
 
 OBSERVATION_SIZE = SENSOR_COUNT + 5
+SPEED_INDEX = SENSOR_COUNT
+DQN_ACTIONS = tuple(DiscreteAction)
+LOW_SPEED_DQN_ACTIONS = (
+    DiscreteAction.THROTTLE,
+    DiscreteAction.LEFT_THROTTLE,
+    DiscreteAction.RIGHT_THROTTLE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +33,11 @@ class DQNConfig:
     epsilon_min: float = 0.05
     epsilon_decay_steps: int = 250_000
     gradient_clip: float = 10.0
+    low_speed_threshold: float = 0.05
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.low_speed_threshold <= 1:
+            raise ValueError("low_speed_threshold must be in [0, 1]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,12 +86,23 @@ class DQNAgent:
         return self.config.epsilon_start + amount * (self.config.epsilon_min - self.config.epsilon_start)
 
     def choose_action(self, observation: Observation) -> DiscreteAction:
+        eligible_actions = self.eligible_actions(observation)
         if self.rng.random() < self.epsilon:
-            return self.rng.choice(tuple(DiscreteAction))
+            return self.rng.choice(eligible_actions)
         return self.greedy_action(observation)
 
     def greedy_action(self, observation: Observation) -> DiscreteAction:
-        return DiscreteAction(max(range(len(DiscreteAction)), key=lambda index: self.q_values(observation)[index]))
+        values = self.q_values(observation)
+        return max(self.eligible_actions(observation), key=lambda action: values[int(action)])
+
+    def eligible_actions(self, observation: Observation) -> tuple[DiscreteAction, ...]:
+        if len(observation) != OBSERVATION_SIZE:
+            raise ValueError(f"observation must contain {OBSERVATION_SIZE} values")
+        return (
+            LOW_SPEED_DQN_ACTIONS
+            if float(observation[SPEED_INDEX]) < self.config.low_speed_threshold
+            else DQN_ACTIONS
+        )
 
     def q_values(self, observation: Observation) -> tuple[float, ...]:
         with torch.no_grad():
@@ -132,7 +155,18 @@ class DQNAgent:
 
         predicted = self.online(observations).gather(1, actions).squeeze(1)
         with torch.no_grad():
-            next_actions = self.online(next_observations).argmax(dim=1, keepdim=True)
+            next_values = self.online(next_observations)
+            low_speed = next_observations[:, SPEED_INDEX] < self.config.low_speed_threshold
+            ineligible = torch.tensor(
+                [action not in LOW_SPEED_DQN_ACTIONS for action in DQN_ACTIONS],
+                dtype=torch.bool,
+                device=next_values.device,
+            )
+            eligible_next_values = next_values.masked_fill(
+                low_speed.unsqueeze(1) & ineligible.unsqueeze(0),
+                -torch.inf,
+            )
+            next_actions = eligible_next_values.argmax(dim=1, keepdim=True)
             future = self.target(next_observations).gather(1, next_actions).squeeze(1)
             expected = rewards + (1 - dones) * discounts * future
         loss = nn.functional.smooth_l1_loss(predicted, expected)

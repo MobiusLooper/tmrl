@@ -8,7 +8,7 @@ from pathlib import Path
 from random import Random
 from typing import Sequence, TypeVar
 
-from backend.env.environment import RacingEnv
+from backend.env.environment import RacingEnv, RewardConfig
 from backend.env.simulation import DT
 from backend.rl.agent import TABULAR_ARCHITECTURE, QLearningAgent, QLearningConfig
 
@@ -27,6 +27,8 @@ from .run_storage import create_run, new_run_metadata, resume_run_metadata
 from .trainer import run_training
 
 T = TypeVar("T")
+
+TABULAR_REWARDS = RewardConfig(timeout=-30.0, pace_floor=-1.0)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -164,7 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         result = run_training(
-            RacingEnv(stall_steps=_stall_steps(setup.config)),
+            RacingEnv(rewards=TABULAR_REWARDS, stall_steps=_stall_steps(setup.config)),
             agent,
             args.episodes,
             start_episode=setup.completed_episode + 1,
@@ -331,7 +333,7 @@ def _setup_from_checkpoint(checkpoint: TrainingCheckpoint) -> _TrainingSetup:
     ):
         raise ValueError(
             "this checkpoint uses a previous tabular architecture; it remains replayable, "
-            "but smooth tabular training must start as a fresh run without --resume"
+            "but local tabular training must start as a fresh run without --resume"
         )
     return _TrainingSetup(
         seed=checkpoint.seed,

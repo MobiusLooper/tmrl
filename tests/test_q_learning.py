@@ -17,6 +17,7 @@ from backend.rl import (
     StateDiscretizer,
 )
 from backend.training import evaluate_policy, run_training, run_training_episode
+from backend.training.q_learning import TABULAR_REWARDS
 
 
 def with_side_rays(observation: tuple[float, ...]) -> Observation:
@@ -36,6 +37,13 @@ def test_discretizer_clamps_values_and_handles_bucket_boundaries() -> None:
     assert StateDiscretizer(5).discretize(observation) == (0, 0, 1, 4, 5, 4, 0, 2)
     assert StateDiscretizer(5).discretize((1.0,) * 12) == (5, 5, 5, 5, 5, 4, 2, 3)
     assert TABULAR_STATE_COUNT == 583_200
+
+
+def test_local_v6_rewards_penalize_late_progress_and_timeout_more_strongly() -> None:
+    assert TABULAR_REWARDS.pace_floor == -1.0
+    result = RacingEnv(rewards=TABULAR_REWARDS, max_steps=1).step(DiscreteAction.COAST)
+    assert result.reward == pytest.approx(-30.01)
+    assert result.info["termination_reason"] == "timeout"
 
 
 @pytest.mark.parametrize(

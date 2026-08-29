@@ -2,7 +2,7 @@ from math import atan2, pi
 
 import pytest
 
-from backend.env.environment import DiscreteAction, RacingEnv
+from backend.env.environment import DiscreteAction, RacingEnv, RewardConfig
 from backend.env.track import Gate, TRACK
 
 
@@ -109,6 +109,18 @@ def test_timeout_reward() -> None:
     assert result.done
     assert result.info["termination_reason"] == "timeout"
     assert result.info["elapsed_time"] == pytest.approx(0.05)
+
+
+def test_pace_floor_can_penalize_late_progress_without_affecting_default_rewards() -> None:
+    default = RacingEnv()
+    signed = RacingEnv(rewards=RewardConfig(pace_floor=-1.0))
+    default.steps = signed.steps = 1_000
+
+    assert default._new_progress_reward(0.5) == pytest.approx(1.0)
+    assert signed._new_progress_reward(0.5) == pytest.approx(0.0)
+
+    with pytest.raises(ValueError, match="pace_floor"):
+        RewardConfig(pace_floor=-1.01)
 
 
 def test_lap_requires_all_checkpoints_and_has_additive_reward() -> None:
