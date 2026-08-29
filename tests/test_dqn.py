@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from backend.env.environment import DiscreteAction, RacingEnv
+from backend.rl import QLearningConfig
 from backend.rl.dqn import (
     DQN_ACTIONS,
     LOW_SPEED_DQN_ACTIONS,
@@ -13,9 +14,24 @@ from backend.rl.dqn import (
     QNetwork,
 )
 from backend.training.curriculum import AdaptiveCurriculum, CurriculumConfig
+from backend.training.dqn_training import _new_curriculum as _new_dqn_curriculum
+from backend.training.q_learning import _new_curriculum as _new_tabular_curriculum
 
 
 OBSERVATION = (0.1, 0.2, 0.3, 0.4, 0.3, 0.2, 0.1, 0.25, 0.1, 0.0, 0.0, 1.0)
+
+
+class RecordingCurriculumEnvironment:
+    def __init__(self) -> None:
+        self.starts: list[tuple[float, float | None]] = []
+
+    def reset(self):
+        self.starts.append((0.0, None))
+        return OBSERVATION
+
+    def reset_at_progress(self, progress: float, *, speed: float = 3.0):
+        self.starts.append((progress, speed))
+        return OBSERVATION
 
 
 def test_q_network_has_one_value_per_action() -> None:
@@ -193,6 +209,117 @@ def test_curriculum_snapshot_preserves_smooth_configuration() -> None:
     restored = AdaptiveCurriculum.from_snapshot(curriculum.snapshot())
     assert restored.config == curriculum.config
     assert restored.rng.getstate() == curriculum.rng.getstate()
+
+
+def test_floor_zero_curriculum_rehearses_all_late_track_starts() -> None:
+    curriculum = AdaptiveCurriculum(
+        Random(14),
+        CurriculumConfig(final_rehearsal_probability=0.5),
+    )
+    curriculum.floor = 0.0
+    environment = RecordingCurriculumEnvironment()
+
+    for _ in range(5_000):
+        curriculum.reset(environment)
+        assert not curriculum.observe(True)
+
+    canonical = sum(progress == 0 for progress, _ in environment.starts)
+    rehearsal_starts = [(progress, speed) for progress, speed in environment.starts if progress]
+    assert canonical / len(environment.starts) == pytest.approx(0.5, abs=0.03)
+    assert {progress for progress, _ in rehearsal_starts} == {
+        value / 100 for value in range(5, 91, 5)
+    }
+    assert all(speed is not None and 2.0 <= speed <= 5.0 for _, speed in rehearsal_starts)
+    assert curriculum.snapshot()["outcomes"] == []
+
+
+def test_final_rehearsal_does_not_change_pre_floor_seeded_behavior() -> None:
+    config = CurriculumConfig(
+        canonical_probability=0.25,
+        final_rehearsal_probability=0.5,
+    )
+    curriculum = AdaptiveCurriculum(Random(73), config)
+    environment = RecordingCurriculumEnvironment()
+    reference = Random(73)
+    expected: list[tuple[float, float | None]] = []
+
+    for _ in range(200):
+        if reference.random() < config.canonical_probability:
+            expected.append((0.0, None))
+        else:
+            progress = reference.choice([0.75, 0.80, 0.85, 0.90])
+            expected.append((progress, reference.uniform(2.0, 5.0)))
+        curriculum.reset(environment)
+
+    assert environment.starts == expected
+    assert curriculum.rng.getstate() == reference.getstate()
+
+
+def test_identical_seeds_produce_identical_floor_zero_start_sequences() -> None:
+    config = CurriculumConfig(final_rehearsal_probability=0.5)
+    first = AdaptiveCurriculum(Random(81), config)
+    second = AdaptiveCurriculum(Random(81), config)
+    first.floor = second.floor = 0.0
+    first_environment = RecordingCurriculumEnvironment()
+    second_environment = RecordingCurriculumEnvironment()
+
+    for _ in range(500):
+        first.reset(first_environment)
+        second.reset(second_environment)
+
+    assert first_environment.starts == second_environment.starts
+    assert first.rng.getstate() == second.rng.getstate()
+
+
+def test_curriculum_snapshot_restores_final_rehearsal_and_rng_sequence() -> None:
+    curriculum = AdaptiveCurriculum(
+        Random(9),
+        CurriculumConfig(final_rehearsal_probability=0.5),
+    )
+    curriculum.floor = 0.0
+    for _ in range(37):
+        curriculum.reset(RecordingCurriculumEnvironment())
+
+    restored = AdaptiveCurriculum.from_snapshot(curriculum.snapshot())
+    first_environment = RecordingCurriculumEnvironment()
+    second_environment = RecordingCurriculumEnvironment()
+    for _ in range(200):
+        curriculum.reset(first_environment)
+        restored.reset(second_environment)
+
+    assert restored.config.final_rehearsal_probability == 0.5
+    assert first_environment.starts == second_environment.starts
+    assert restored.rng.getstate() == curriculum.rng.getstate()
+
+
+def test_legacy_curriculum_snapshot_remains_canonical_only_at_floor_zero() -> None:
+    curriculum = AdaptiveCurriculum(
+        Random(19),
+        CurriculumConfig(final_rehearsal_probability=0.5),
+    )
+    curriculum.floor = 0.0
+    snapshot = curriculum.snapshot()
+    raw_config = snapshot["config"]
+    assert isinstance(raw_config, dict)
+    raw_config.pop("final_rehearsal_probability")
+
+    restored = AdaptiveCurriculum.from_snapshot(snapshot)
+    initial_rng_state = restored.rng.getstate()
+    environment = RecordingCurriculumEnvironment()
+    for _ in range(100):
+        restored.reset(environment)
+
+    assert restored.config.final_rehearsal_probability == 0.0
+    assert environment.starts == [(0.0, None)] * 100
+    assert restored.rng.getstate() == initial_rng_state
+
+
+def test_only_fresh_dqn_curriculum_enables_final_rehearsal() -> None:
+    dqn = _new_dqn_curriculum(0)
+    tabular = _new_tabular_curriculum(0, QLearningConfig())
+
+    assert dqn.config.final_rehearsal_probability == 0.5
+    assert tabular.config.final_rehearsal_probability == 0.0
 
 
 def test_stall_terminates_early_with_explicit_penalty() -> None:

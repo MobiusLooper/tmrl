@@ -18,6 +18,7 @@ class CurriculumEnvironment(Protocol):
 @dataclass(frozen=True, slots=True)
 class CurriculumConfig:
     canonical_probability: float = 0.25
+    final_rehearsal_probability: float = 0.0
     initial_floor: float = 0.75
     promotion_window: int = 50
     promotion_rate: float = 0.35
@@ -26,6 +27,8 @@ class CurriculumConfig:
     def __post_init__(self) -> None:
         if not 0 <= self.canonical_probability <= 1:
             raise ValueError("canonical_probability must be in [0, 1]")
+        if not 0 <= self.final_rehearsal_probability <= 1:
+            raise ValueError("final_rehearsal_probability must be in [0, 1]")
         if self.initial_floor not in {0.0, 0.25, 0.5, 0.75}:
             raise ValueError("initial_floor must be one of 0, 0.25, 0.5, or 0.75")
         if self.promotion_window < 1:
@@ -35,7 +38,7 @@ class CurriculumConfig:
 
 
 class AdaptiveCurriculum:
-    """Seeded backwards curriculum that eventually returns to canonical-only starts."""
+    """Seeded backwards curriculum with optional rehearsal after final promotion."""
 
     def __init__(self, rng: Random, config: CurriculumConfig = CurriculumConfig()) -> None:
         self.rng = rng
@@ -45,20 +48,31 @@ class AdaptiveCurriculum:
         self.last_start_progress = 0.0
 
     def reset(self, environment: CurriculumEnvironment) -> Observation:
-        if self.floor <= 0 or self.rng.random() < self.config.canonical_probability:
+        if self.floor <= 0:
+            if (
+                self.config.final_rehearsal_probability == 0
+                or self.rng.random() >= self.config.final_rehearsal_probability
+            ):
+                self.last_start_progress = 0.0
+                return environment.reset()
+            floor = 0.05
+            ceiling = 0.90
+        elif self.rng.random() < self.config.canonical_probability:
             self.last_start_progress = 0.0
             return environment.reset()
-        ceiling = self._stage_ceiling()
+        else:
+            floor = self.floor
+            ceiling = self._stage_ceiling()
         choices = [
             value / 100
-            for value in range(round(self.floor * 100), round(ceiling * 100) + 1, 5)
+            for value in range(round(floor * 100), round(ceiling * 100) + 1, 5)
         ]
         self.last_start_progress = self.rng.choice(choices)
         speed = self.rng.uniform(2.0, 5.0)
         return environment.reset_at_progress(self.last_start_progress, speed=speed)
 
     def observe(self, lap_completed: bool) -> bool:
-        if self.last_start_progress == 0:
+        if self.floor <= 0 or self.last_start_progress == 0:
             return False
         self._outcomes.append(lap_completed)
         if len(self._outcomes) < self.config.promotion_window:

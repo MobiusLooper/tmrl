@@ -15,7 +15,7 @@ import torch
 from backend.env.environment import RacingEnv
 from backend.rl.dqn import OBSERVATION_SIZE, DQNAgent, DQNConfig, DQNPolicy
 
-from .curriculum import AdaptiveCurriculum
+from .curriculum import AdaptiveCurriculum, CurriculumConfig
 from .evaluator import EvaluationRecord, evaluate_policy_with_replay
 from .replay import EvaluationReplay
 from .runner import EpisodeRecord
@@ -77,7 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         seed = args.seed if args.seed is not None else 0
         agent = DQNAgent(Random(seed), DQNConfig(), seed=seed)
-        curriculum = AdaptiveCurriculum(Random(seed + 2_000_000))
+        curriculum = _new_curriculum(seed)
         records: list[EpisodeRecord] = []
         evaluations: list[EvaluationRecord] = []
         replays: list[EvaluationReplay] = []
@@ -177,6 +177,13 @@ def _record(info: dict[str, object], episode: int) -> EpisodeRecord:
     return EpisodeRecord(
         episode, int(info["steps"]), elapsed, float(info["episode_return"]),
         float(info["furthest_progress"]), reason, reason == "lap", elapsed if reason == "lap" else None,
+    )
+
+
+def _new_curriculum(seed: int) -> AdaptiveCurriculum:
+    return AdaptiveCurriculum(
+        Random(seed + 2_000_000),
+        CurriculumConfig(final_rehearsal_probability=0.5),
     )
 
 
