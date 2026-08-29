@@ -15,8 +15,9 @@ from backend.rl.q_table import QTable
 
 from .evaluator import EvaluationRecord
 from .replay import EvaluationReplay, ReplayState, ReplayTransition
-from .run_storage import RunMetadata
+from .run_storage import RunMetadata, inferred_run_id
 from .runner import EpisodeRecord
+from .trajectory import save_trajectory_catalog
 
 SCHEMA_VERSION = 1
 DEFAULT_CHECKPOINT_PATH = Path("artifacts/latest.json")
@@ -175,6 +176,11 @@ def save_checkpoint(checkpoint: TrainingCheckpoint, path: str | Path) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
+        save_trajectory_catalog(
+            destination,
+            checkpoint.run_id or inferred_run_id(destination),
+            checkpoint.replays,
+        )
     finally:
         if temporary is not None and temporary.exists():
             temporary.unlink()

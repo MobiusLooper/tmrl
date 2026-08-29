@@ -79,7 +79,10 @@
         <div class="controls-hint"><b>↑ / W</b> throttle <b>↓ / S</b> brake <b>← → / A D</b> steer</div>
 
         <div class="replay-controls" id="replay-controls">
-          <select id="replay-run-select" aria-label="Training run"></select>
+          <div class="replay-run-picker">
+            <select id="replay-run-select" aria-label="Training run"></select>
+            <button class="primary" id="replay-load" type="button">Load</button>
+          </div>
           <div class="replay-buttons">
             <button id="replay-previous" type="button" title="Previous checkpoint">←</button>
             <button class="primary" id="replay-play" type="button">Play</button>
@@ -94,7 +97,7 @@
             <option value="5">5×</option>
             <option value="10">10×</option>
           </select>
-          <button id="replay-reload" type="button" title="Reload latest replay">↻</button>
+          <button id="replay-reload" type="button" title="Refresh learning runs">↻</button>
         </div>
       </section>
     </main>

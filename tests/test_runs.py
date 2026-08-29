@@ -12,7 +12,7 @@ from backend.training.checkpoint import checkpoint_from_agent, load_checkpoint, 
 from backend.training.curriculum import AdaptiveCurriculum
 from backend.training.dqn_training import _resume_model_path, _save as save_dqn, main as dqn_main
 from backend.training.q_learning import main as tabular_main
-from backend.training.run_catalog import discover_runs, inspect_run
+from backend.training.run_catalog import discover_run_summaries, discover_runs, inspect_run
 from backend.training.run_storage import RunMetadata, create_run
 from backend.training.trainer import run_training
 
@@ -64,6 +64,10 @@ def test_run_discovery_combines_new_and_legacy_checkpoints(tmp_path: Path) -> No
 
     configured = discover_runs(artifacts, configured_checkpoint=legacy_path)
     assert configured.default_run_id == catalog.runs[1].run_id
+
+    summaries = discover_run_summaries(artifacts)
+    assert summaries.default_run_id == catalog.default_run_id
+    assert [run.as_dict() for run in summaries.runs] == [run.as_dict() for run in catalog.runs]
 
 
 def test_dqn_run_uses_colocated_manifest_model_files(tmp_path: Path) -> None:

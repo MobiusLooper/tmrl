@@ -20,6 +20,7 @@ from .evaluator import EvaluationRecord, evaluate_policy_with_replay
 from .replay import EvaluationReplay
 from .runner import EpisodeRecord
 from .run_storage import RunMetadata, create_run, new_run_metadata, resume_run_metadata
+from .trajectory import save_trajectory_catalog
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -247,6 +248,7 @@ def _save(
         handle.write("\n")
         temporary_manifest = Path(handle.name)
     os.replace(temporary_manifest, path)
+    save_trajectory_catalog(path, run_metadata.run_id, replays)
 
 
 def _model_paths(path: Path) -> tuple[Path, Path]:

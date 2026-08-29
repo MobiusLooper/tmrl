@@ -107,7 +107,7 @@ Run the PyTorch Double DQN learner:
 uv run python -m backend.training.train --algorithm dqn --episodes 3000 --max-transitions 1000000 --seed 0
 ```
 
-Both learners evaluate from the canonical starting grid and preserve their best evaluated policy. Every fresh command creates a timestamped run under `artifacts/runs/`, for example `artifacts/runs/20260828T143012Z-tabular-local-seed0-a1b2c3d4/`. Tabular runs contain `checkpoint.json` and `best.json`; DQN runs contain `checkpoint.json`, `model.pt`, and `best-model.pt`.
+Both learners evaluate from the canonical starting grid and preserve their best evaluated policy. Every fresh command creates a timestamped run under `artifacts/runs/`, for example `artifacts/runs/20260828T143012Z-tabular-local-seed0-a1b2c3d4/`. Runs include a compact `trajectories.json` route catalog for immediate browser comparison. Tabular runs also contain `checkpoint.json` and `best.json`; DQN runs contain `checkpoint.json`, `model.pt`, and `best-model.pt`.
 
 The command prints its run ID and checkpoint path, reports training throughput, epsilon and evaluation progress, saves after every evaluation, and records the best greedy attempt from each evaluation batch. Training and evaluation use separate seeded random streams, so changing evaluation frequency does not alter learning.
 
@@ -151,6 +151,6 @@ The FastAPI server serves the built app at [http://127.0.0.1:8000](http://127.0.
 * `GET /api/runs/{run_id}/replays` returns one run's chronological evaluation catalog.
 * `GET /api/runs/{run_id}/replays/latest` returns that run's newest selected trajectory.
 * `GET /api/runs/{run_id}/replays/{training_episode}` returns one selected trajectory.
-* `GET /api/runs/{run_id}/trajectories` returns lightweight position and heading histories for comparing every checkpoint in a run.
+* `GET /api/runs/{run_id}/trajectories` streams the precomputed position and heading histories used to compare every checkpoint in a run. Older checkpoints are backfilled on their first request.
 * The existing `GET /api/replays`, `/api/replays/latest`, and `/api/replays/{training_episode}` routes remain aliases for the default run.
 * `/ws/play` creates an isolated manual-driving session and streams state snapshots containing the seven normalized sensor readings.

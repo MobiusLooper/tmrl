@@ -68,6 +68,8 @@ kbd { display: inline-grid; place-items: center; min-width: 27px; height: 27px; 
 .replay-controls button:disabled, .replay-controls select:disabled, .replay-controls input:disabled { opacity: .4; cursor: default; }
 .replay-controls button.primary { min-width: 68px; color: #14200f; border-color: #baf43c; background: #baf43c; }
 .replay-controls button.active { color: #baf43c; border-color: #799c36; }
+.replay-run-picker { display: flex; gap: 5px; min-width: 0; }
+.replay-run-picker select { min-width: 0; flex: 1; }
 .replay-buttons { display: flex; gap: 5px; }
 .replay-buttons button { padding: 0 11px; }
 .replay-controls input[type="range"] { width: 100%; accent-color: #baf43c; }
@@ -96,7 +98,7 @@ kbd { display: inline-grid; place-items: center; min-width: 27px; height: 27px; 
   .metric strong { font-size: 14px; }
   .controls-hint { display: none; }
   [data-mode="replay"] .replay-controls { right: 10px; bottom: 10px; left: 10px; grid-template-columns: 1fr auto auto; }
-  #replay-run-select { grid-column: 1 / -1; }
+  .replay-run-picker { grid-column: 1 / -1; }
   .replay-buttons { grid-column: 1 / -1; }
   .replay-buttons button { flex: 1; }
   .replay-controls input[type="range"] { grid-column: 1 / -1; grid-row: 2; }

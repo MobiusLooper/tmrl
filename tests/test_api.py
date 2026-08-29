@@ -8,6 +8,7 @@ from backend.env.environment import RacingEnv
 from backend.rl import QLearningAgent
 from backend.api.server import app
 from backend.training.checkpoint import checkpoint_from_agent, save_checkpoint
+from backend.training.trajectory import trajectory_path
 from backend.training.trainer import run_training
 
 
@@ -143,6 +144,38 @@ def test_trajectory_endpoint_rejects_a_run_without_replays(tmp_path: Path, monke
     response = client.get(f"/api/runs/{run_id}/trajectories")
     assert response.status_code == 404
     assert "does not contain any replays" in response.json()["detail"]
+
+
+def test_trajectory_endpoint_streams_precomputed_routes_without_loading_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    checkpoint_path = _write_replay_checkpoint(tmp_path)
+    monkeypatch.setattr(server_module, "CHECKPOINT_PATH", checkpoint_path)
+    run_id = client.get("/api/runs").json()["default_run_id"]
+
+    def fail_if_loaded(path: Path):
+        raise AssertionError(f"full checkpoint should not be loaded: {path}")
+
+    monkeypatch.setattr(server_module, "_load_run", fail_if_loaded)
+    response = client.get(f"/api/runs/{run_id}/trajectories")
+
+    assert response.status_code == 200
+    assert response.json()["trajectory_count"] == 1
+
+
+def test_trajectory_endpoint_backfills_legacy_run_sidecar(tmp_path: Path, monkeypatch) -> None:
+    checkpoint_path = _write_replay_checkpoint(tmp_path)
+    saved_path = trajectory_path(checkpoint_path)
+    saved_path.unlink()
+    monkeypatch.setattr(server_module, "CHECKPOINT_PATH", checkpoint_path)
+    run_id = client.get("/api/runs").json()["default_run_id"]
+
+    response = client.get(f"/api/runs/{run_id}/trajectories")
+
+    assert response.status_code == 200
+    assert saved_path.is_file()
+    assert response.json()["trajectory_count"] == 1
 
 
 def _write_replay_checkpoint(tmp_path: Path) -> Path:

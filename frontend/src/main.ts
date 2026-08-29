@@ -110,6 +110,7 @@ const replayPlay = document.querySelector<HTMLButtonElement>("#replay-play")!;
 const replayAll = document.querySelector<HTMLButtonElement>("#replay-all")!;
 const replayPrevious = document.querySelector<HTMLButtonElement>("#replay-previous")!;
 const replayNext = document.querySelector<HTMLButtonElement>("#replay-next")!;
+const replayLoad = document.querySelector<HTMLButtonElement>("#replay-load")!;
 const replayReload = document.querySelector<HTMLButtonElement>("#replay-reload")!;
 const emptyReload = document.querySelector<HTMLButtonElement>("#empty-reload")!;
 const replayTimeline = document.querySelector<HTMLInputElement>("#replay-timeline")!;
@@ -130,8 +131,10 @@ let toastTimer = 0;
 let catalog: ReplayCatalog | null = null;
 let runCatalog: RunCatalog | null = null;
 let selectedRunId: string | null = null;
+let loadedRunId: string | null = null;
 let replay: Replay | null = null;
 let trajectoryCatalog: TrajectoryCatalog | null = null;
+let trajectoryRequest: Promise<TrajectoryCatalog> | null = null;
 let comparingAll = false;
 let replayIndex = -1;
 let replayPosition = 0;
@@ -320,10 +323,10 @@ const loadRuns = async (): Promise<void> => {
     if (!selectedRun) throw new Error("No training runs are available yet");
     selectedRunId = selectedRun.run_id;
     replayRunSelect.value = selectedRunId;
-    await loadRunCatalog(selectedRunId);
   } catch (error) {
     runCatalog = null;
     selectedRunId = null;
+    loadedRunId = null;
     catalog = null;
     replay = null;
     trajectoryCatalog = null;
@@ -340,6 +343,7 @@ const loadRunCatalog = async (runId: string): Promise<void> => {
   replayPlaying = false;
   comparingAll = false;
   trajectoryCatalog = null;
+  trajectoryRequest = null;
   shell.dataset.review = "single";
   showReplayError(null);
   updateReplayControls();
@@ -348,7 +352,12 @@ const loadRunCatalog = async (runId: string): Promise<void> => {
       cache: "no-store",
     });
     if (!response.ok) throw new Error(await responseDetail(response));
-    catalog = await response.json() as ReplayCatalog;
+    const nextCatalog = await response.json() as ReplayCatalog;
+    if (selectedRunId !== runId) return;
+    catalog = nextCatalog;
+    loadedRunId = runId;
+    replay = null;
+    preloadTrajectories(runId);
     const compareOption = document.createElement("option");
     compareOption.value = "all";
     compareOption.textContent = "All checkpoints";
@@ -358,10 +367,13 @@ const loadRunCatalog = async (runId: string): Promise<void> => {
       option.textContent = `Episode ${item.training_episode}`;
       return option;
     }));
-    await loadReplay(catalog.replays.length - 1, false);
+    await loadReplay(catalog.replays.length - 1, false, runId);
   } catch (error) {
+    if (selectedRunId !== runId) return;
     catalog = null;
+    loadedRunId = null;
     replay = null;
+    trajectoryCatalog = null;
     showReplayError(error instanceof Error ? error.message : "Unable to load replay");
   } finally {
     replayLoading = false;
@@ -378,19 +390,25 @@ const formatRun = (run: TrainingRun): string => {
   return `${timestamp} · ${run.algorithm.toUpperCase()} · seed ${run.seed} · ep ${run.completed_episode} · ${best}`;
 };
 
-const loadReplay = async (index: number, keepPlaying: boolean): Promise<void> => {
+const loadReplay = async (
+  index: number,
+  keepPlaying: boolean,
+  runId: string | null = loadedRunId,
+): Promise<void> => {
   if (!catalog || index < 0 || index >= catalog.replays.length) return;
   replayLoading = true;
   updateReplayControls();
   const metadata = catalog.replays[index]!;
   try {
-    if (!selectedRunId) throw new Error("No training run is selected");
+    if (!runId) throw new Error("No training run is loaded");
     const response = await fetch(
-      `/api/runs/${encodeURIComponent(selectedRunId)}/replays/${metadata.training_episode}`,
+      `/api/runs/${encodeURIComponent(runId)}/replays/${metadata.training_episode}`,
       { cache: "no-store" },
     );
     if (!response.ok) throw new Error(await responseDetail(response));
-    replay = await response.json() as Replay;
+    const nextReplay = await response.json() as Replay;
+    if (loadedRunId !== runId || selectedRunId !== runId) return;
+    replay = nextReplay;
     comparingAll = false;
     shell.dataset.review = "single";
     replayIndex = index;
@@ -405,6 +423,7 @@ const loadReplay = async (index: number, keepPlaying: boolean): Promise<void> =>
     showReplayError(null);
     lastAnimationTime = performance.now();
   } catch (error) {
+    if (loadedRunId !== runId || selectedRunId !== runId) return;
     replay = null;
     comparingAll = false;
     shell.dataset.review = "single";
@@ -446,20 +465,39 @@ const playbackSteps = (): number => {
   return replay?.steps ?? 0;
 };
 
+const fetchTrajectories = async (runId: string): Promise<TrajectoryCatalog> => {
+  const response = await fetch(
+    `/api/runs/${encodeURIComponent(runId)}/trajectories`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) throw new Error(await responseDetail(response));
+  return await response.json() as TrajectoryCatalog;
+};
+
+const preloadTrajectories = (runId: string): void => {
+  const request = fetchTrajectories(runId);
+  trajectoryRequest = request;
+  void request.then((nextCatalog) => {
+    if (selectedRunId === runId) trajectoryCatalog = nextCatalog;
+  }).catch(() => {
+    if (trajectoryRequest === request) trajectoryRequest = null;
+  });
+};
+
 const showAllTrajectories = async (): Promise<void> => {
-  if (!catalog?.replays.length || !selectedRunId) return;
+  if (!catalog?.replays.length || !loadedRunId || selectedRunId !== loadedRunId) return;
+  const runId = loadedRunId;
   replayLoading = true;
   replayPlaying = false;
   showReplayError(null);
   updateReplayControls();
   try {
     if (!trajectoryCatalog) {
-      const response = await fetch(
-        `/api/runs/${encodeURIComponent(selectedRunId)}/trajectories`,
-        { cache: "no-store" },
+      const nextTrajectoryCatalog = await (
+        trajectoryRequest ?? fetchTrajectories(runId)
       );
-      if (!response.ok) throw new Error(await responseDetail(response));
-      trajectoryCatalog = await response.json() as TrajectoryCatalog;
+      if (loadedRunId !== runId || selectedRunId !== runId) return;
+      trajectoryCatalog = nextTrajectoryCatalog;
     }
     comparingAll = true;
     shell.dataset.review = "compare";
@@ -473,6 +511,7 @@ const showAllTrajectories = async (): Promise<void> => {
     replayResult.textContent = `Episodes ${trajectories[0]!.training_episode}–${trajectories.at(-1)!.training_episode} · early blue → latest lime`;
     lastAnimationTime = performance.now();
   } catch (error) {
+    if (loadedRunId !== runId || selectedRunId !== runId) return;
     comparingAll = false;
     shell.dataset.review = "single";
     showReplayError(error instanceof Error ? error.message : "Unable to load trajectories");
@@ -483,10 +522,14 @@ const showAllTrajectories = async (): Promise<void> => {
 };
 
 const updateReplayControls = (): void => {
-  const available = (comparingAll ? trajectoryCatalog !== null : replay !== null) && !replayLoading;
+  const selectedRunIsLoaded = selectedRunId !== null && selectedRunId === loadedRunId;
+  const available = selectedRunIsLoaded
+    && (comparingAll ? trajectoryCatalog !== null : replay !== null)
+    && !replayLoading;
   replayPlay.disabled = !available;
-  replayRunSelect.disabled = replayLoading || !runCatalog?.runs.length;
-  replayAll.disabled = !catalog?.replays.length || replayLoading;
+  replayRunSelect.disabled = !runCatalog?.runs.length;
+  replayLoad.disabled = replayLoading || !selectedRunId;
+  replayAll.disabled = !selectedRunIsLoaded || !catalog?.replays.length || replayLoading;
   replayPrevious.disabled = comparingAll || !available || replayIndex <= 0;
   replayNext.disabled = comparingAll || !available || !catalog || replayIndex >= catalog.replays.length - 1;
   replayTimeline.disabled = !available;
@@ -494,7 +537,10 @@ const updateReplayControls = (): void => {
   replayPlay.textContent = replayPlaying ? "Pause" : "Play";
   replayAll.classList.toggle("active", comparingAll);
   replayControls.classList.toggle("loading", replayLoading);
-  replaySummary.classList.toggle("visible", replay !== null || trajectoryCatalog !== null);
+  replaySummary.classList.toggle(
+    "visible",
+    selectedRunIsLoaded && (replay !== null || trajectoryCatalog !== null),
+  );
 };
 
 replayPlay.addEventListener("click", toggleReplay);
@@ -504,11 +550,15 @@ replayAll.addEventListener("click", () => {
 });
 replayPrevious.addEventListener("click", () => void loadReplay(replayIndex - 1, false));
 replayNext.addEventListener("click", () => void loadReplay(replayIndex + 1, false));
+replayLoad.addEventListener("click", () => {
+  if (selectedRunId) void loadRunCatalog(selectedRunId);
+});
 replayReload.addEventListener("click", () => void loadRuns());
 emptyReload.addEventListener("click", () => void loadRuns());
 replayRunSelect.addEventListener("change", () => {
   selectedRunId = replayRunSelect.value;
-  void loadRunCatalog(selectedRunId);
+  replayPlaying = false;
+  updateReplayControls();
 });
 replaySelect.addEventListener("change", () => {
   if (replaySelect.value === "all") {
@@ -816,6 +866,7 @@ const render = (now: number): void => {
 };
 
 const boot = async (): Promise<void> => {
+  void loadRuns();
   const response = await fetch("/api/track");
   if (!response.ok) throw new Error(`Unable to load track (${response.status})`);
   track = await response.json() as Track;

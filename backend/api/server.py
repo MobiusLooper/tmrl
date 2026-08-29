@@ -14,8 +14,18 @@ from backend.env.simulation import Action, DT, RacingSimulation
 from backend.env.sensors import sensor_config
 from backend.env.track import TRACK
 from backend.training.checkpoint import CheckpointError
-from backend.training.replay import EvaluationReplay, ReplayState, steering_metrics
-from backend.training.run_catalog import RunCatalog, TrainingRun, discover_runs
+from backend.training.replay import EvaluationReplay, steering_metrics
+from backend.training.run_catalog import (
+    RunSummaryCatalog,
+    TrainingRun,
+    discover_run_summaries,
+    inspect_run,
+)
+from backend.training.trajectory import (
+    save_trajectory_catalog,
+    saved_trajectory_count,
+    trajectory_path,
+)
 
 app = FastAPI(title="RL Racer")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -55,7 +65,12 @@ async def get_runs() -> dict[str, object]:
 
 @app.get("/api/runs/{run_id}/replays")
 async def get_run_replays(run_id: str) -> dict[str, object]:
-    return _replay_catalog(_get_run(run_id))
+    summary = _run_catalog().find(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail=f"no training run exists with ID {run_id}")
+    run = _load_run(summary.checkpoint_path)
+    _ensure_trajectory_catalog(summary.checkpoint_path, run)
+    return _replay_catalog(run)
 
 
 @app.get("/api/runs/{run_id}/replays/latest")
@@ -68,9 +83,25 @@ async def get_run_replay(run_id: str, training_episode: int) -> dict[str, object
     return asdict(_find_replay(_get_run(run_id), training_episode))
 
 
-@app.get("/api/runs/{run_id}/trajectories")
-async def get_run_trajectories(run_id: str) -> dict[str, object]:
-    return _trajectory_catalog(_get_run(run_id))
+@app.get("/api/runs/{run_id}/trajectories", response_model=None)
+async def get_run_trajectories(run_id: str) -> FileResponse | dict[str, object]:
+    summary = _run_catalog().find(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail=f"no training run exists with ID {run_id}")
+    saved_path = trajectory_path(summary.checkpoint_path)
+    saved_count = saved_trajectory_count(saved_path)
+    if saved_count == 0:
+        raise HTTPException(status_code=404, detail="the training checkpoint does not contain any replays")
+    if (
+        saved_count is not None
+        and saved_path.stat().st_mtime_ns >= summary.checkpoint_path.stat().st_mtime_ns
+    ):
+        return FileResponse(saved_path, media_type="application/json")
+    run = _load_run(summary.checkpoint_path)
+    if not run.replays:
+        raise HTTPException(status_code=404, detail="the training checkpoint does not contain any replays")
+    generated_path = _ensure_trajectory_catalog(summary.checkpoint_path, run)
+    return FileResponse(generated_path, media_type="application/json")
 
 
 @app.websocket("/ws/play")
@@ -117,9 +148,9 @@ async def play(websocket: WebSocket) -> None:
         pass
 
 
-def _run_catalog() -> RunCatalog:
+def _run_catalog() -> RunSummaryCatalog:
     try:
-        return discover_runs(ARTIFACTS_DIR, configured_checkpoint=CHECKPOINT_PATH)
+        return discover_run_summaries(ARTIFACTS_DIR, configured_checkpoint=CHECKPOINT_PATH)
     except FileNotFoundError as error:
         raise HTTPException(
             status_code=404,
@@ -130,17 +161,34 @@ def _run_catalog() -> RunCatalog:
 
 
 def _default_run() -> TrainingRun:
-    run = _run_catalog().default
-    if run is None:
+    summary = _run_catalog().default
+    if summary is None:
         raise HTTPException(status_code=404, detail="no training checkpoint is available yet")
-    return run
+    return _load_run(summary.checkpoint_path)
 
 
 def _get_run(run_id: str) -> TrainingRun:
-    run = _run_catalog().find(run_id)
-    if run is None:
+    summary = _run_catalog().find(run_id)
+    if summary is None:
         raise HTTPException(status_code=404, detail=f"no training run exists with ID {run_id}")
-    return run
+    return _load_run(summary.checkpoint_path)
+
+
+def _load_run(path: Path) -> TrainingRun:
+    try:
+        return inspect_run(path)
+    except CheckpointError as error:
+        raise HTTPException(status_code=503, detail=f"training checkpoint is invalid: {error}") from error
+
+
+def _ensure_trajectory_catalog(checkpoint_path: Path, run: TrainingRun) -> Path:
+    saved_path = trajectory_path(checkpoint_path)
+    if (
+        saved_trajectory_count(saved_path) is not None
+        and saved_path.stat().st_mtime_ns >= checkpoint_path.stat().st_mtime_ns
+    ):
+        return saved_path
+    return save_trajectory_catalog(checkpoint_path, run.run_id, run.replays)
 
 
 def _replay_catalog(run: TrainingRun) -> dict[str, object]:
@@ -181,35 +229,6 @@ def _replay_metadata(replay: EvaluationReplay) -> dict[str, object]:
         "lap_completed": replay.lap_completed,
         "steering_changes_per_second": smoothness.changes_per_second,
         "direct_steering_reversals_per_second": smoothness.direct_reversals_per_second,
-    }
-
-
-def _trajectory_catalog(run: TrainingRun) -> dict[str, object]:
-    if not run.replays:
-        raise HTTPException(status_code=404, detail="the training checkpoint does not contain any replays")
-    return {
-        "run_id": run.run_id,
-        "latest_training_episode": run.replays[-1].training_episode,
-        "trajectories": [
-            {
-                **_replay_metadata(replay),
-                "states": [
-                    _trajectory_state(replay.initial_state),
-                    *(_trajectory_state(transition.state) for transition in replay.transitions),
-                ],
-            }
-            for replay in run.replays
-        ],
-    }
-
-
-def _trajectory_state(state: ReplayState) -> dict[str, object]:
-    return {
-        "tick": state.tick,
-        "x": state.x,
-        "y": state.y,
-        "heading": state.heading,
-        "crashed": state.crashed,
     }
 
 
