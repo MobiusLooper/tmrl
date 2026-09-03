@@ -79,8 +79,10 @@ class EvaluationReplay:
     transitions: tuple[ReplayTransition, ...]
 
     def __post_init__(self) -> None:
-        if self.training_episode < 1 or self.evaluation_episode < 1 or self.steps < 1:
-            raise ValueError("replay episode numbers and step count must be positive")
+        if self.training_episode < 0 or self.evaluation_episode < 1 or self.steps < 1:
+            raise ValueError(
+                "replay training episode must be non-negative; evaluation episode and steps must be positive"
+            )
         if self.steps != len(self.transitions):
             raise ValueError("replay step count must match its transitions")
         if self.termination_reason not in {"crash", "lap", "timeout", "stalled"}:

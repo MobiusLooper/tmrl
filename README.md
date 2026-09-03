@@ -61,13 +61,17 @@ npm run dev
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Drive with the arrow keys or WASD. Press `R` or Space to restart.
 
+Manual mode automatically records every attempt that starts from the reset grid. Any clean lap strictly under 30.0 seconds is validated and appended to the permanent library for the current track and environment. Recording holds each discrete input for two physics ticks so it matches tabular control timing. Crashes and interrupted attempts are discarded; after a finish or crash, press `R` to begin another eligible attempt.
+
+The stable schema-v2 library path is shown in the webapp and has the form `artifacts/demonstrations/track-TRACK_HASH-env-ENVIRONMENT_HASH.json`. Existing compatible schema-v1 collections are merged into it on first access without deleting the legacy files. The JSON contains the applied 20 Hz action sequence, initial and resulting physical states, track fingerprint, physics, sensor configuration and action definitions. It intentionally contains no learner-specific rewards or observations: tabular and DQN pretraining replay an atomic snapshot through the compatible `RacingEnv` to reconstruct those values.
+
 The seven sensor rays cover relative angles `-90°`, `-60°`, `-30°`, `0°`, `+30°`, `+60°` and `+90°`. Their numeric readings are normalized over a 12-unit range, where `0` means the boundary is at the car and `1` means no boundary is detected within range.
 
-The shared learning observation adds normalized lap progress, signed lateral offset, and sine/cosine heading error. DQN consumes all twelve continuous values. Local-v6 tabular learning continues to use the five forward-facing rays from `-60°` through `+60°`, plus discretised speed, three signed lateral bands, and five heading-error bands. Absolute progress is deliberately excluded, so crossing 25%, 50%, or 75% does not create an unrelated Q-table row. The resulting sparse table has an upper bound of 583,200 states.
+The shared learning observation adds normalized lap progress, signed lateral offset, and sine/cosine heading error. DQN consumes all twelve continuous values. Local-v7 tabular learning continues to use the five forward-facing rays from `-60°` through `+60°`, plus discretised speed, three signed lateral bands, and five heading-error bands. Absolute progress is deliberately excluded, so crossing 25%, 50%, or 75% does not create an unrelated Q-table row. The resulting sparse table has an upper bound of 583,200 states.
 
-Rewards favour first-time checkpoint progress and early, moving checkpoint crossings; re-crossing an old checkpoint cannot farm positive reward. Local-v6 gives late checkpoint crossings a bounded negative pace component and applies a `-30` timeout penalty, so a slow partial route is no longer nearly as valuable as an on-pace lap. DQN retains the original non-negative pace bonus and `-15` timeout penalty. Local tabular training and evaluation allow ten seconds without new progress, while DQN retains the environment's five-second default.
+Rewards favour first-time checkpoint progress and early, moving checkpoint crossings; re-crossing an old checkpoint cannot farm positive reward. Progress may bridge exactly one adjacent generated gate on a tight bend, keeping valid manual laps aligned with learner training while preserving ordered progression. Local-v7 gives late checkpoint crossings a bounded negative pace component and applies a `-30` timeout penalty, so a slow partial route is no longer nearly as valuable as an on-pace lap. DQN retains the original non-negative pace bonus and `-15` timeout penalty. Local tabular training and evaluation allow ten seconds without new progress, while DQN retains the environment's five-second default.
 
-Local-v6 tabular control uses all nine combinations of coast, throttle, or brake with straight, left, or right steering, allowing acceleration and braking to continue through a turn. Below normalized speed `0.10`, exploration, greedy control, and bootstrapping remain restricted to throttle, left with throttle, and right with throttle, preventing stationary brake or coast loops. A tabular decision is made at 10 Hz and held for two 50 ms physics frames. For learned rows, the previous eligible action is retained when it is within `0.03` of the best Q-value. Unseen moving rows coast and unseen low-speed rows throttle instead of inheriting an arbitrary sticky action. Replays still contain every 20 Hz physics frame and all nine browser-facing Q-values.
+Local-v7 tabular control uses all nine combinations of coast, throttle, or brake with straight, left, or right steering, allowing acceleration and braking to continue through a turn. Below normalized speed `0.10`, exploration, greedy control, and bootstrapping remain restricted to throttle, left with throttle, and right with throttle, preventing stationary brake or coast loops. A tabular decision is made at 10 Hz and held for two 50 ms physics frames. For learned rows, the previous eligible action is retained when it is within `0.03` of the best Q-value. Unseen moving rows coast and unseen low-speed rows throttle instead of inheriting an arbitrary sticky action. Replays still contain every 20 Hz physics frame and all nine browser-facing Q-values.
 
 Tabular training uses a seeded backwards curriculum with 50% canonical starts. Other starts are sampled from the current 75–90%, 50–70%, or 25–45% band. Once at least 35% of the latest 50 non-canonical starts complete the remaining lap, training advances to the next band and reheats epsilon to `0.30`. Greedy evaluation always starts from the original grid at zero speed.
 
@@ -107,6 +111,18 @@ Run the PyTorch Double DQN learner:
 uv run python -m backend.training.train --algorithm dqn --episodes 3000 --max-transitions 1000000 --seed 0
 ```
 
+Bootstrap either learner from the active track library (or a completed legacy schema-v1 package) before normal online training:
+
+```bash
+uv run python -m backend.training.train --algorithm tabular --episodes 3000 \
+  --demonstrations artifacts/demonstrations/DATASET_ID.json --seed 0
+
+uv run python -m backend.training.train --algorithm dqn --episodes 3000 \
+  --demonstrations artifacts/demonstrations/DATASET_ID.json --seed 0
+```
+
+Tabular pretraining performs fitted Q backups over two-frame demonstration decisions. DQN performs behavior cloning, then permanently reserves 25% of each replay batch for demonstration transitions and retains a small cloning loss. Pretraining is evaluated and checkpointed as episode 0 without consuming epsilon decay. DQN-specific defaults can be changed with `--demonstration-epochs`, `--demonstration-mix`, and `--demonstration-bc-weight`. Demonstrations apply only to fresh runs; resume the resulting checkpoint without passing the dataset again.
+
 Both learners evaluate from the canonical starting grid and preserve their best evaluated policy. Every fresh command creates a timestamped run under `artifacts/runs/`, for example `artifacts/runs/20260828T143012Z-tabular-local-seed0-a1b2c3d4/`. Runs include a compact `trajectories.json` route catalog for immediate browser comparison. Tabular runs also contain `checkpoint.json` and `best.json`; DQN runs contain `checkpoint.json`, `model.pt`, and `best-model.pt`.
 
 The command prints its run ID and checkpoint path, reports training throughput, epsilon and evaluation progress, saves after every evaluation, and records the best greedy attempt from each evaluation batch. Training and evaluation use separate seeded random streams, so changing evaluation frequency does not alter learning.
@@ -133,7 +149,7 @@ Open the webapp and switch to **Agent Replay** to choose among discovered tabula
 RL_RACER_CHECKPOINT=path/to/checkpoint.json npm run dev
 ```
 
-Legacy top-level checkpoints are included in the run selector and remain replayable. Five-ray DQN checkpoints cannot resume into the twelve-value, seven-ray network; start a fresh DQN run without `--resume`. Six-part legacy, seven-part `tabular-smooth-v3`, previous nine-part tables, and eight-part `tabular-local-v4` and `tabular-local-v5` checkpoints cannot resume into `tabular-local-v6`. V4 used different active-action semantics; v5 used the earlier reward semantics. Local-v6 checkpoints include the architecture, action repeat, sticky tolerance, curriculum probability, and stall duration needed for an exact compatible resume. Training runs from the command line; named experiment grouping, live metrics, and browser-controlled experiments remain future work.
+Legacy top-level checkpoints are included in the run selector and remain replayable. DQN checkpoints from earlier observation or learning-environment versions cannot resume; start a fresh DQN run without `--resume`. Six-part legacy, seven-part `tabular-smooth-v3`, previous nine-part tables, and earlier eight-part local checkpoints through `tabular-local-v6` cannot resume into `tabular-local-v7`. Local-v7 checkpoints include the architecture, action repeat, sticky tolerance, curriculum probability, and stall duration needed for an exact compatible resume. Training runs from the command line; named experiment grouping, live metrics, and browser-controlled experiments remain future work.
 
 ## Production build
 

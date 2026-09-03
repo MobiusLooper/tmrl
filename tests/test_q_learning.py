@@ -17,7 +17,8 @@ from backend.rl import (
     StateDiscretizer,
 )
 from backend.training import evaluate_policy, run_training, run_training_episode
-from backend.training.q_learning import TABULAR_REWARDS
+from backend.training.demonstrations import DemonstrationLap, DemonstrationTransition
+from backend.training.q_learning import TABULAR_REWARDS, pretrain_tabular
 
 
 def with_side_rays(observation: tuple[float, ...]) -> Observation:
@@ -39,11 +40,40 @@ def test_discretizer_clamps_values_and_handles_bucket_boundaries() -> None:
     assert TABULAR_STATE_COUNT == 583_200
 
 
-def test_local_v6_rewards_penalize_late_progress_and_timeout_more_strongly() -> None:
+def test_local_v7_rewards_penalize_late_progress_and_timeout_more_strongly() -> None:
     assert TABULAR_REWARDS.pace_floor == -1.0
     result = RacingEnv(rewards=TABULAR_REWARDS, max_steps=1).step(DiscreteAction.COAST)
     assert result.reward == pytest.approx(-30.01)
     assert result.info["termination_reason"] == "timeout"
+
+
+def test_tabular_pretraining_averages_duplicate_targets_without_decaying_epsilon() -> None:
+    agent = QLearningAgent(Random(0), QLearningConfig(discount=0.5))
+    laps = tuple(
+        DemonstrationLap(
+            f"lap-{reward}",
+            (
+                DemonstrationTransition(
+                    MOVING_OBSERVATION,
+                    DiscreteAction.LEFT,
+                    reward,
+                    NEXT_OBSERVATION,
+                    True,
+                    2,
+                ),
+            ),
+        )
+        for reward in (2.0, 4.0)
+    )
+
+    statistics = pretrain_tabular(agent, laps)
+    state = agent.discretizer.discretize(MOVING_OBSERVATION)
+
+    assert agent.q_table.value(state, DiscreteAction.LEFT) == 3.0
+    assert agent.training_steps == 0
+    assert agent.epsilon == 1.0
+    assert statistics["macro_transitions"] == 2
+    assert statistics["eligible_action_agreement"] == 1.0
 
 
 @pytest.mark.parametrize(

@@ -3,14 +3,22 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
 from random import Random
+from statistics import fmean
 from typing import Sequence, TypeVar
 
-from backend.env.environment import RacingEnv, RewardConfig
+from backend.env.environment import DiscreteAction, RacingEnv, RewardConfig
 from backend.env.simulation import DT
-from backend.rl.agent import TABULAR_ARCHITECTURE, QLearningAgent, QLearningConfig
+from backend.rl.agent import (
+    TABULAR_ARCHITECTURE,
+    GreedyPolicy,
+    QLearningAgent,
+    QLearningConfig,
+    eligible_tabular_actions,
+)
 
 from .checkpoint import (
     CheckpointError,
@@ -20,7 +28,13 @@ from .checkpoint import (
     save_checkpoint,
 )
 from .curriculum import AdaptiveCurriculum, CurriculumConfig
-from .evaluator import EvaluationRecord
+from .demonstrations import (
+    ACTION_REPEAT,
+    DemonstrationLap,
+    aggregate_demonstration_laps,
+    load_demonstration_dataset,
+)
+from .evaluator import EvaluationRecord, evaluate_policy_with_replay
 from .replay import EvaluationReplay, steering_metrics
 from .runner import EpisodeRecord, summarize_run
 from .run_storage import create_run, new_run_metadata, resume_run_metadata
@@ -66,6 +80,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="custom checkpoint output path (default: a timestamped artifacts/runs directory)",
     )
     parser.add_argument("--resume", type=Path, help="resume a saved checkpoint")
+    parser.add_argument(
+        "--demonstrations", type=Path, help="active or completed human-lap dataset"
+    )
+    parser.add_argument(
+        "--demonstration-epochs",
+        type=_positive_int,
+        default=500,
+        help="maximum fitted-Q backup sweeps before online training",
+    )
     return parser
 
 
@@ -73,6 +96,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.resume is not None and args.checkpoint is not None:
         raise SystemExit("--checkpoint cannot be combined with --resume")
+    if args.resume is not None and args.demonstrations is not None:
+        raise SystemExit("--demonstrations cannot be combined with --resume")
     try:
         setup = _training_setup(args)
     except (CheckpointError, ValueError) as error:
@@ -82,6 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     records = list(setup.records)
     evaluations = list(setup.evaluations)
     replays = list(setup.replays)
+    pretraining = setup.pretraining
     curriculum = (
         AdaptiveCurriculum.from_snapshot(setup.curriculum)
         if setup.curriculum is not None
@@ -101,18 +127,58 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         run_metadata, checkpoint_path = create_run("tabular-local", setup.seed)
     print(f"run {run_metadata.run_id} | checkpoint {checkpoint_path}")
+
+    if args.demonstrations is not None:
+        if setup.config.action_repeat != ACTION_REPEAT:
+            raise SystemExit(
+                f"demonstrations require --action-repeat={ACTION_REPEAT}; "
+                f"received {setup.config.action_repeat}"
+            )
+        try:
+            dataset = load_demonstration_dataset(
+                args.demonstrations,
+                rewards=TABULAR_REWARDS,
+                stall_steps=_stall_steps(setup.config),
+            )
+            demonstration_laps = aggregate_demonstration_laps(
+                dataset,
+                action_repeat=setup.config.action_repeat,
+                discount=setup.config.discount,
+            )
+        except (OSError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        fitted = pretrain_tabular(agent, demonstration_laps, max_epochs=args.demonstration_epochs)
+        evaluation, replay = evaluate_policy_with_replay(
+            RacingEnv(rewards=TABULAR_REWARDS, stall_steps=_stall_steps(setup.config)),
+            GreedyPolicy(agent),
+            setup.evaluation_episodes,
+            training_episode=0,
+            action_repeat=setup.config.action_repeat,
+        )
+        evaluations.append(evaluation)
+        replays.append(replay)
+        pretraining = dataset.provenance(method="fitted-q", **fitted)
+        print(
+            f"demonstrations | laps {len(dataset.laps)} | physics {dataset.transition_count} | "
+            f"decisions {fitted['macro_transitions']} | states {fitted['visited_states']} | "
+            f"agreement {float(fitted['eligible_action_agreement']):.1%}"
+        )
+        print(
+            f"evaluation @0 | mean progress {evaluation.mean_progress:.3%} | "
+            f"best {evaluation.best_progress:.3%} | laps {evaluation.lap_completions}"
+        )
     stop = _GracefulStop()
     previous_handler = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, stop.handle_signal)
     latest_elapsed = 0.0
 
     def persist(current_wall_time: float, destination: Path | None = None) -> None:
-        if not records:
+        if not records and pretraining is None:
             return
         checkpoint = checkpoint_from_agent(
             agent,
             seed=setup.seed,
-            completed_episode=records[-1].episode,
+            completed_episode=records[-1].episode if records else 0,
             evaluate_every=setup.evaluate_every,
             evaluation_episodes=setup.evaluation_episodes,
             evaluation_seed=setup.evaluation_seed,
@@ -122,6 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             replays=tuple(replays),
             curriculum=curriculum.snapshot(),
             run_metadata=run_metadata.touch(),
+            pretraining=pretraining,
         )
         save_checkpoint(checkpoint, destination or checkpoint_path)
 
@@ -163,6 +230,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else checkpoint_path.with_name(f"{checkpoint_path.stem}-best{checkpoint_path.suffix}")
             )
             persist(latest_elapsed, best_path)
+
+    if pretraining is not None and not records:
+        persist(0.0)
+        best_path = (
+            checkpoint_path.with_name("best.json")
+            if checkpoint_path.name == "checkpoint.json"
+            else checkpoint_path.with_name(f"{checkpoint_path.stem}-best{checkpoint_path.suffix}")
+        )
+        persist(0.0, best_path)
 
     try:
         result = run_training(
@@ -249,6 +325,7 @@ class _TrainingSetup:
         evaluations: tuple[EvaluationRecord, ...] = (),
         replays: tuple[EvaluationReplay, ...] = (),
         curriculum: dict[str, object] | None = None,
+        pretraining: dict[str, object] | None = None,
         run_id: str | None = None,
         created_at: str | None = None,
     ) -> None:
@@ -266,6 +343,7 @@ class _TrainingSetup:
         self.curriculum = curriculum
         self.run_id = run_id
         self.created_at = created_at
+        self.pretraining = pretraining
 
 
 def _training_setup(args: argparse.Namespace) -> _TrainingSetup:
@@ -350,7 +428,82 @@ def _setup_from_checkpoint(checkpoint: TrainingCheckpoint) -> _TrainingSetup:
         curriculum=checkpoint.curriculum,
         run_id=checkpoint.run_id,
         created_at=checkpoint.created_at,
+        pretraining=checkpoint.pretraining,
     )
+
+
+def pretrain_tabular(
+    agent: QLearningAgent,
+    laps: tuple[DemonstrationLap, ...],
+    *,
+    max_epochs: int = 500,
+    tolerance: float = 1e-5,
+) -> dict[str, object]:
+    if max_epochs < 1:
+        raise ValueError("demonstration epochs must be positive")
+    if not laps or not any(lap.transitions for lap in laps):
+        raise ValueError("tabular pretraining requires demonstration transitions")
+
+    state_actions: dict[tuple[int, ...], set[int]] = defaultdict(set)
+    macro_transitions = 0
+    for lap in laps:
+        for transition in lap.transitions:
+            state = agent.discretizer.discretize(transition.observation)
+            state_actions[state].add(int(transition.action))
+            macro_transitions += 1
+
+    converged = False
+    maximum_change = 0.0
+    epoch = 0
+    for epoch in range(1, max_epochs + 1):
+        targets: dict[tuple[tuple[int, ...], int], list[float]] = defaultdict(list)
+        for lap in laps:
+            for transition in lap.transitions:
+                future = 0.0
+                if not transition.done:
+                    next_values = agent.q_values(transition.next_observation)
+                    future = max(
+                        next_values[int(action)]
+                        for action in eligible_tabular_actions(transition.next_observation)
+                    )
+                target = transition.reward + agent.config.discount**transition.duration * future
+                state = agent.discretizer.discretize(transition.observation)
+                targets[(state, int(transition.action))].append(target)
+
+        maximum_change = 0.0
+        for (state, action_index), values in targets.items():
+            action = DiscreteAction(action_index)
+            updated = fmean(values)
+            maximum_change = max(
+                maximum_change,
+                abs(updated - agent.q_table.value(state, action)),
+            )
+            agent.q_table.set_value(state, action, updated)
+        if maximum_change < tolerance:
+            converged = True
+            break
+
+    matching = 0
+    eligible = 0
+    for lap in laps:
+        policy = GreedyPolicy(agent)
+        policy.start_episode()
+        for transition in lap.transitions:
+            if transition.action in eligible_tabular_actions(transition.observation):
+                eligible += 1
+                matching += policy.choose_action(transition.observation) == transition.action
+
+    return {
+        "epochs": epoch,
+        "max_epochs": max_epochs,
+        "converged": converged,
+        "maximum_change": maximum_change,
+        "macro_transitions": macro_transitions,
+        "visited_states": len(state_actions),
+        "conflicting_states": sum(len(actions) > 1 for actions in state_actions.values()),
+        "eligible_action_samples": eligible,
+        "eligible_action_agreement": matching / eligible if eligible else 0.0,
+    }
 
 
 def _match(name: str, supplied: T | None, saved: T) -> None:

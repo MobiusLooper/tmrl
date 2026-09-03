@@ -7,7 +7,7 @@ from random import Random
 import torch
 from torch import Tensor, nn
 
-from backend.env.environment import DiscreteAction, Observation
+from backend.env.environment import LEARNING_ENVIRONMENT_VERSION, DiscreteAction, Observation
 from backend.env.sensors import SENSOR_COUNT
 
 OBSERVATION_SIZE = SENSOR_COUNT + 5
@@ -34,10 +34,16 @@ class DQNConfig:
     epsilon_decay_steps: int = 250_000
     gradient_clip: float = 10.0
     low_speed_threshold: float = 0.05
+    demonstration_mix: float = 0.25
+    demonstration_bc_weight: float = 0.1
 
     def __post_init__(self) -> None:
         if not 0 <= self.low_speed_threshold <= 1:
             raise ValueError("low_speed_threshold must be in [0, 1]")
+        if not 0 <= self.demonstration_mix < 1:
+            raise ValueError("demonstration_mix must be in [0, 1)")
+        if self.demonstration_bc_weight < 0:
+            raise ValueError("demonstration_bc_weight must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +82,7 @@ class DQNAgent:
         self.target.eval()
         self.optimizer = torch.optim.Adam(self.online.parameters(), lr=config.learning_rate)
         self.buffer: deque[ReplayItem] = deque(maxlen=config.replay_capacity)
+        self.demonstration_buffer: tuple[ReplayItem, ...] = ()
         self.pending: deque[tuple[Observation, DiscreteAction, float, Observation, bool]] = deque()
         self.transitions = 0
         self.updates = 0
@@ -145,7 +152,18 @@ class DQNAgent:
         )
 
     def _optimize(self) -> float:
-        batch = self.rng.sample(tuple(self.buffer), self.config.batch_size)
+        demonstration_count = (
+            min(
+                len(self.demonstration_buffer),
+                round(self.config.batch_size * self.config.demonstration_mix),
+            )
+            if self.demonstration_buffer
+            else 0
+        )
+        online_count = self.config.batch_size - demonstration_count
+        batch = [*self.rng.sample(tuple(self.buffer), online_count)]
+        if demonstration_count:
+            batch.extend(self.rng.sample(self.demonstration_buffer, demonstration_count))
         observations = torch.tensor([item.observation for item in batch], dtype=torch.float32)
         actions = torch.tensor([item.action for item in batch], dtype=torch.int64).unsqueeze(1)
         rewards = torch.tensor([item.reward for item in batch], dtype=torch.float32)
@@ -153,7 +171,8 @@ class DQNAgent:
         dones = torch.tensor([item.done for item in batch], dtype=torch.float32)
         discounts = torch.tensor([item.discount for item in batch], dtype=torch.float32)
 
-        predicted = self.online(observations).gather(1, actions).squeeze(1)
+        all_values = self.online(observations)
+        predicted = all_values.gather(1, actions).squeeze(1)
         with torch.no_grad():
             next_values = self.online(next_observations)
             low_speed = next_observations[:, SPEED_INDEX] < self.config.low_speed_threshold
@@ -170,6 +189,21 @@ class DQNAgent:
             future = self.target(next_observations).gather(1, next_actions).squeeze(1)
             expected = rewards + (1 - dones) * discounts * future
         loss = nn.functional.smooth_l1_loss(predicted, expected)
+        if demonstration_count and self.config.demonstration_bc_weight:
+            demonstration_start = online_count
+            eligible_indices = [
+                index
+                for index in range(demonstration_start, len(batch))
+                if DiscreteAction(batch[index].action)
+                in self.eligible_actions(batch[index].observation)
+            ]
+            if eligible_indices:
+                index_tensor = torch.tensor(eligible_indices, dtype=torch.int64)
+                labels = actions.squeeze(1).index_select(0, index_tensor)
+                cloning_loss = nn.functional.cross_entropy(
+                    all_values.index_select(0, index_tensor), labels
+                )
+                loss = loss + self.config.demonstration_bc_weight * cloning_loss
         self.optimizer.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(self.online.parameters(), self.config.gradient_clip)
@@ -179,14 +213,23 @@ class DQNAgent:
             self.target.load_state_dict(self.online.state_dict())
         return float(loss.detach())
 
+    def set_demonstration_buffer(self, items: tuple[ReplayItem, ...]) -> None:
+        self.demonstration_buffer = tuple(items)
+
+    def reset_optimizer(self) -> None:
+        self.optimizer = torch.optim.Adam(self.online.parameters(), lr=self.config.learning_rate)
+        self.updates = 0
+
     def snapshot(self) -> dict[str, object]:
         return {
+            "learning_environment_version": LEARNING_ENVIRONMENT_VERSION,
             "observation_size": OBSERVATION_SIZE,
             "config": asdict(self.config),
             "online": self.online.state_dict(),
             "target": self.target.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "buffer": list(self.buffer),
+            "demonstration_buffer": list(self.demonstration_buffer),
             "pending": list(self.pending),
             "transitions": self.transitions,
             "updates": self.updates,
@@ -196,6 +239,12 @@ class DQNAgent:
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, object]) -> DQNAgent:
+        environment_version = snapshot.get("learning_environment_version")
+        if environment_version != LEARNING_ENVIRONMENT_VERSION:
+            raise ValueError(
+                f"DQN checkpoint uses learning environment version {environment_version!r}; "
+                f"version {LEARNING_ENVIRONMENT_VERSION} is required"
+            )
         observation_size = snapshot.get("observation_size", 10)
         if observation_size != OBSERVATION_SIZE:
             raise ValueError(
@@ -208,6 +257,7 @@ class DQNAgent:
         agent.target.load_state_dict(snapshot["target"])  # type: ignore[arg-type]
         agent.optimizer.load_state_dict(snapshot["optimizer"])  # type: ignore[arg-type]
         agent.buffer.extend(snapshot["buffer"])  # type: ignore[arg-type]
+        agent.demonstration_buffer = tuple(snapshot.get("demonstration_buffer", ()))  # type: ignore[arg-type]
         agent.pending.extend(snapshot["pending"])  # type: ignore[arg-type]
         agent.transitions = int(snapshot["transitions"])
         agent.updates = int(snapshot["updates"])

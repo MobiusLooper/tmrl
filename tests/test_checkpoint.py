@@ -56,7 +56,7 @@ def test_checkpoint_round_trip_restores_complete_agent_and_history(tmp_path: Pat
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert restored == checkpoint
-    assert payload["agent"]["config"]["architecture"] == "tabular-local-v6"
+    assert payload["agent"]["config"]["architecture"] == "tabular-local-v7"
     assert payload["agent"]["config"]["action_repeat"] == 2
     assert payload["agent"]["config"]["sticky_tolerance"] == 0.03
     restored_agent = restored.restore_agent()
@@ -64,6 +64,27 @@ def test_checkpoint_round_trip_restores_complete_agent_and_history(tmp_path: Pat
     assert restored_agent.rng.getstate() == agent.rng.getstate()
     assert restored_agent.epsilon == agent.epsilon
     assert not list(path.parent.glob("*.tmp"))
+
+
+def test_episode_zero_pretraining_checkpoint_round_trips(tmp_path: Path) -> None:
+    checkpoint = checkpoint_from_agent(
+        QLearningAgent(Random(1)),
+        seed=1,
+        completed_episode=0,
+        evaluate_every=50,
+        evaluation_episodes=10,
+        evaluation_seed=1_000_001,
+        training_wall_time=0,
+        records=(),
+        evaluations=(),
+        replays=(),
+        pretraining={"dataset_id": "demo"},
+    )
+    path = tmp_path / "episode-zero.json"
+
+    save_checkpoint(checkpoint, path)
+
+    assert load_checkpoint(path) == checkpoint
 
 
 def test_resumed_training_matches_an_uninterrupted_run(tmp_path: Path) -> None:

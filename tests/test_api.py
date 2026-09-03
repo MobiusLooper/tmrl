@@ -33,17 +33,17 @@ def test_websocket_accepts_input_and_reset() -> None:
         websocket.send_json(
             {"type": "input", "seq": 1, "throttle": True, "brake": False, "left": False, "right": False}
         )
-        moving = websocket.receive_json()
+        moving = _receive_state(websocket)
         while moving["speed"] == 0:
-            moving = websocket.receive_json()
+            moving = _receive_state(websocket)
         assert moving["tick"] > initial["tick"]
         assert moving["speed"] > 0
         assert len(moving["sensors"]) == 7
 
         websocket.send_json({"type": "reset"})
-        reset = websocket.receive_json()
+        reset = _receive_state(websocket)
         while reset["speed"] != 0:
-            reset = websocket.receive_json()
+            reset = _receive_state(websocket)
         assert reset["speed"] == 0
         assert not reset["crashed"]
         assert len(reset["sensors"]) == 7
@@ -56,12 +56,20 @@ def test_websocket_sessions_are_isolated() -> None:
         first.send_json(
             {"type": "input", "seq": 1, "throttle": True, "brake": False, "left": False, "right": False}
         )
-        first_state = first.receive_json()
+        first_state = _receive_state(first)
         while first_state["speed"] == 0:
-            first_state = first.receive_json()
-        second_state = second.receive_json()
+            first_state = _receive_state(first)
+        second_state = _receive_state(second)
         assert first_state["speed"] > 0
         assert second_state["speed"] == 0
+
+
+def _receive_state(websocket: object) -> dict[str, object]:
+    receive_json = getattr(websocket, "receive_json")
+    while True:
+        payload = receive_json()
+        if payload.get("type") == "state":
+            return payload
 
 
 def test_replay_catalog_latest_and_episode_endpoints(tmp_path: Path, monkeypatch) -> None:

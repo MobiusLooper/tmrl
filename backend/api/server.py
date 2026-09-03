@@ -14,6 +14,11 @@ from backend.env.simulation import Action, DT, RacingSimulation
 from backend.env.sensors import sensor_config
 from backend.env.track import TRACK
 from backend.training.checkpoint import CheckpointError
+from backend.training.demonstrations import (
+    DemonstrationError,
+    DemonstrationStore,
+    LapRecorder,
+)
 from backend.training.replay import EvaluationReplay, steering_metrics
 from backend.training.run_catalog import (
     RunSummaryCatalog,
@@ -30,6 +35,8 @@ from backend.training.trajectory import (
 app = FastAPI(title="RL Racer")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+DEMONSTRATIONS_DIR = ARTIFACTS_DIR / "demonstrations"
+DEMONSTRATION_STORE = DemonstrationStore(DEMONSTRATIONS_DIR)
 _configured_checkpoint = os.environ.get("RL_RACER_CHECKPOINT")
 CHECKPOINT_PATH = Path(_configured_checkpoint).expanduser() if _configured_checkpoint else None
 
@@ -37,6 +44,15 @@ CHECKPOINT_PATH = Path(_configured_checkpoint).expanduser() if _configured_check
 @app.get("/api/track")
 async def get_track() -> dict[str, object]:
     return {**TRACK.as_dict(), "sensors": sensor_config()}
+
+
+@app.get("/api/demonstrations/current")
+async def get_current_demonstration_library() -> dict[str, object]:
+    try:
+        payload = await asyncio.to_thread(DEMONSTRATION_STORE.current)
+        return DEMONSTRATION_STORE.summary(payload)
+    except DemonstrationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @app.get("/api/replays")
@@ -109,16 +125,75 @@ async def play(websocket: WebSocket) -> None:
     await websocket.accept()
     simulation = RacingSimulation()
     action = Action()
+    recorder = LapRecorder()
     latest_sequence = -1
     next_tick = monotonic() + DT
-    await websocket.send_json(simulation.snapshot())
+    try:
+        library = await asyncio.to_thread(DEMONSTRATION_STORE.current)
+    except DemonstrationError as error:
+        await websocket.send_json(simulation.snapshot())
+        await websocket.send_json(
+            {"type": "recording_status", "status": "error", "message": str(error)}
+        )
+        library = None
+    else:
+        await websocket.send_json(recorder.start(simulation, reset=False))
+        await websocket.send_json(
+            _recording_status("started", library, "Recording attempt · 0.0s")
+        )
     try:
         while True:
             timeout = max(0.0, next_tick - monotonic())
             try:
                 message = await asyncio.wait_for(websocket.receive_json(), timeout=timeout)
             except TimeoutError:
-                await websocket.send_json(simulation.step(action))
+                snapshot, recording_event = recorder.step(simulation, action)
+                await websocket.send_json(snapshot)
+                if recording_event is not None:
+                    if library is None:
+                        await websocket.send_json(
+                            {
+                                "type": "recording_status",
+                                "status": "error",
+                                "message": "Demonstration library is unavailable",
+                            }
+                        )
+                    elif recording_event.status == "qualifying" and recording_event.lap is not None:
+                        lap_time = float(recording_event.lap_time)
+                        await websocket.send_json(
+                            _recording_status(
+                                "saving", library, recording_event.message, lap_time
+                            )
+                        )
+                        try:
+                            library = await asyncio.to_thread(
+                                DEMONSTRATION_STORE.append, recording_event.lap
+                            )
+                        except DemonstrationError as error:
+                            await websocket.send_json(
+                                _recording_status("error", library, str(error))
+                            )
+                        else:
+                            await websocket.send_json(
+                                _recording_status(
+                                    "saved",
+                                    library,
+                                    f"Lap {lap_time:.1f}s saved · "
+                                    f"{DEMONSTRATION_STORE.summary(library)['lap_count']} "
+                                    "qualifying laps · press R for another",
+                                    lap_time,
+                                )
+                            )
+                        next_tick = monotonic()
+                    else:
+                        await websocket.send_json(
+                            _recording_status(
+                                recording_event.status,
+                                library,
+                                recording_event.message,
+                                recording_event.lap_time,
+                            )
+                        )
                 next_tick += DT
                 if next_tick < monotonic() - DT:
                     next_tick = monotonic() + DT
@@ -126,10 +201,38 @@ async def play(websocket: WebSocket) -> None:
 
             message_type = message.get("type")
             if message_type == "reset":
-                simulation.reset()
+                recorder.cancel("Attempt discarded by restart")
                 action = Action()
-                await websocket.send_json(simulation.snapshot())
+                snapshot = simulation.reset()
+                library_error: str | None = None
+                try:
+                    library = await asyncio.to_thread(DEMONSTRATION_STORE.current)
+                except DemonstrationError as error:
+                    library = None
+                    library_error = str(error)
+                await websocket.send_json(snapshot)
+                if library is None:
+                    await websocket.send_json(
+                        {
+                            "type": "recording_status",
+                            "status": "error",
+                            "message": library_error or "Demonstration library is unavailable",
+                        }
+                    )
+                else:
+                    recorder.start(simulation, reset=False)
+                    await websocket.send_json(
+                        _recording_status("started", library, "Recording attempt · 0.0s")
+                    )
                 next_tick = monotonic() + DT
+                continue
+            if message_type == "manual_pause":
+                event = recorder.cancel("Attempt discarded after leaving manual mode")
+                action = Action()
+                if event is not None and library is not None:
+                    await websocket.send_json(
+                        _recording_status(event.status, library, event.message)
+                    )
                 continue
             if message_type != "input":
                 continue
@@ -145,7 +248,22 @@ async def play(websocket: WebSocket) -> None:
                 right=message.get("right") is True,
             )
     except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
-        pass
+        recorder.cancel("Recording discarded after disconnect")
+
+
+def _recording_status(
+    status: str,
+    library: dict[str, object],
+    message: str,
+    lap_time: float | None = None,
+) -> dict[str, object]:
+    return {
+        "type": "recording_status",
+        **DEMONSTRATION_STORE.summary(library),
+        "status": status,
+        "message": message,
+        "lap_time": lap_time,
+    }
 
 
 def _run_catalog() -> RunSummaryCatalog:

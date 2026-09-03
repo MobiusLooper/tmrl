@@ -49,10 +49,11 @@ class TrainingCheckpoint:
     run_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    pretraining: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
-        if self.completed_episode < 1:
-            raise CheckpointError("completed_episode must be positive")
+        if self.completed_episode < 0:
+            raise CheckpointError("completed_episode must be non-negative")
         if self.evaluate_every < 1 or self.evaluation_episodes < 1:
             raise CheckpointError("evaluation settings must be positive")
         if not isfinite(self.training_wall_time) or self.training_wall_time < 0:
@@ -131,6 +132,7 @@ def checkpoint_from_agent(
     replays: tuple[EvaluationReplay, ...],
     curriculum: dict[str, object] | None = None,
     run_metadata: RunMetadata | None = None,
+    pretraining: dict[str, object] | None = None,
 ) -> TrainingCheckpoint:
     return TrainingCheckpoint(
         seed=seed,
@@ -153,6 +155,7 @@ def checkpoint_from_agent(
         run_id=None if run_metadata is None else run_metadata.run_id,
         created_at=None if run_metadata is None else run_metadata.created_at,
         updated_at=None if run_metadata is None else run_metadata.updated_at,
+        pretraining=pretraining,
     )
 
 
@@ -239,6 +242,8 @@ def _checkpoint_payload(checkpoint: TrainingCheckpoint) -> dict[str, object]:
             created_at=checkpoint.created_at,
             updated_at=checkpoint.updated_at,
         )
+    if checkpoint.pretraining is not None:
+        run["pretraining"] = checkpoint.pretraining
     return {
         "schema_version": SCHEMA_VERSION,
         "run": run,
@@ -310,6 +315,11 @@ def _checkpoint_from_payload(payload: Mapping[str, Any]) -> TrainingCheckpoint:
         run_id=None if run.get("run_id") is None else str(run["run_id"]),
         created_at=None if run.get("created_at") is None else str(run["created_at"]),
         updated_at=None if run.get("updated_at") is None else str(run["updated_at"]),
+        pretraining=(
+            None
+            if run.get("pretraining") is None
+            else dict(_mapping(run["pretraining"], "run.pretraining"))
+        ),
     )
 
 

@@ -72,7 +72,7 @@ def test_action_replay_is_deterministic() -> None:
 def test_checkpoints_are_ordered_and_reverse_crossings_remove_progress() -> None:
     environment = RacingEnv()
 
-    out_of_order = cross_gate(environment, environment.checkpoints[1])
+    out_of_order = cross_gate(environment, environment.checkpoints[2])
     assert out_of_order.reward == pytest.approx(-0.01)
     assert out_of_order.info["current_progress"] == 0
 
@@ -86,6 +86,16 @@ def test_checkpoints_are_ordered_and_reverse_crossings_remove_progress() -> None
     assert reverse.info["current_progress"] == 0
     assert reverse.info["furthest_progress"] == pytest.approx(0.01)
     assert reverse.reward == pytest.approx(-1.01)
+
+
+def test_progress_can_bridge_exactly_one_adjacent_gate() -> None:
+    environment = RacingEnv()
+
+    result = cross_gate(environment, environment.checkpoints[1])
+
+    assert result.info["current_progress"] == pytest.approx(0.02)
+    assert result.info["furthest_progress"] == pytest.approx(0.02)
+    assert result.reward > 3.9
 
 
 def test_crash_reward_and_terminal_step_guard() -> None:

@@ -11,6 +11,7 @@ from .simulation import Action, DT, MAX_SPEED, RacingSimulation
 from .track import TRACK, Gate, Track, progress_gates
 
 Observation: TypeAlias = tuple[float, ...]
+LEARNING_ENVIRONMENT_VERSION = 2
 
 
 class DiscreteAction(IntEnum):
@@ -173,14 +174,30 @@ class RacingEnv:
         self._steps_since_progress = 0
 
     def _update_progress(self, previous: Point, current: Point) -> tuple[float, bool]:
-        if self.current_checkpoint < len(self.checkpoints):
-            next_gate = self.checkpoints[self.current_checkpoint]
-            if next_gate.contains_crossing(previous, current, self.track.half_width):
-                self.current_checkpoint += 1
-                if self.current_checkpoint > self.furthest_checkpoint:
-                    self.furthest_checkpoint = self.current_checkpoint
-                    return self._new_progress_reward(self.current_checkpoint / self.checkpoint_count), True
-                return 0.0, False
+        # Adjacent generated gates can have slightly different tangent planes on a
+        # tight bend. A valid on-track path can therefore cross gate N + 1 without
+        # crossing gate N's infinite plane. Look ahead by exactly one gate so that
+        # progress remains ordered while tolerating that geometric edge case.
+        gate_stop = min(len(self.checkpoints), self.current_checkpoint + 2)
+        crossed = [
+            checkpoint
+            for checkpoint in range(self.current_checkpoint, gate_stop)
+            if self.checkpoints[checkpoint].contains_crossing(
+                previous, current, self.track.half_width
+            )
+        ]
+        if crossed:
+            next_checkpoint = max(crossed) + 1
+            previous_furthest = self.furthest_checkpoint
+            self.current_checkpoint = next_checkpoint
+            if next_checkpoint > previous_furthest:
+                self.furthest_checkpoint = next_checkpoint
+                reward = sum(
+                    self._new_progress_reward(checkpoint / self.checkpoint_count)
+                    for checkpoint in range(previous_furthest + 1, next_checkpoint + 1)
+                )
+                return reward, True
+            return 0.0, False
 
         if self.current_checkpoint > 0:
             previous_gate = self.checkpoints[self.current_checkpoint - 1]

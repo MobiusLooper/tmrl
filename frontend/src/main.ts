@@ -78,6 +78,21 @@ type RunCatalog = {
   default_run_id: string | null;
   runs: TrainingRun[];
 };
+type DemonstrationCollection = {
+  dataset_id: string;
+  created_at: string;
+  updated_at: string;
+  status: "active";
+  lap_count: number;
+  max_lap_time_exclusive: number;
+  path: string;
+};
+type RecordingStatus = Partial<Omit<DemonstrationCollection, "status">> & {
+  type: "recording_status";
+  status: "started" | "saving" | "saved" | "rejected" | "discarded" | "error";
+  message: string;
+  lap_time: number | null;
+};
 type Mode = "manual" | "replay";
 
 const DT = 0.05;
@@ -97,6 +112,9 @@ const promptElement = document.querySelector<HTMLElement>("#prompt")!;
 const crashElement = document.querySelector<HTMLElement>("#crash")!;
 const toastElement = document.querySelector<HTMLElement>("#toast")!;
 const restartButton = document.querySelector<HTMLButtonElement>("#restart")!;
+const recordStatusElement = document.querySelector<HTMLElement>("#record-status")!;
+const recordDetailElement = document.querySelector<HTMLElement>("#record-detail")!;
+const recordPathElement = document.querySelector<HTMLElement>("#record-path")!;
 const manualModeButton = document.querySelector<HTMLButtonElement>("#manual-mode")!;
 const replayModeButton = document.querySelector<HTMLButtonElement>("#replay-mode")!;
 const replayEmpty = document.querySelector<HTMLElement>("#replay-empty")!;
@@ -127,6 +145,9 @@ let mode: Mode = "manual";
 let manualPrevious: ManualSnapshot | null = null;
 let manualCurrent: ManualSnapshot | null = null;
 let previousLapCount = 0;
+let demonstrationCollection: DemonstrationCollection | null = null;
+let recordingStatus: RecordingStatus["status"] = "started";
+let recordingMessage = "Preparing automatic capture…";
 let toastTimer = 0;
 let catalog: ReplayCatalog | null = null;
 let runCatalog: RunCatalog | null = null;
@@ -166,6 +187,29 @@ const restartManual = (): void => {
   promptElement.classList.add("hidden");
   crashElement.classList.remove("visible");
   socket?.send(JSON.stringify({ type: "reset" }));
+};
+
+const updateRecordingPanel = (message?: string): void => {
+  if (message) recordingMessage = message;
+  const collection = demonstrationCollection;
+  recordStatusElement.textContent = recordingMessage;
+  recordDetailElement.textContent = collection
+    ? `${collection.lap_count} qualifying lap${collection.lap_count === 1 ? "" : "s"} · `
+      + `automatically saves clean laps under ${collection.max_lap_time_exclusive.toFixed(1)}s`
+    : "Automatically saves clean laps under 30.0s.";
+  recordPathElement.textContent = collection?.path ?? "Preparing the track library…";
+  recordPathElement.title = collection?.path ?? "";
+};
+
+const loadDemonstrationLibrary = async (): Promise<void> => {
+  try {
+    const response = await fetch("/api/demonstrations/current", { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseDetail(response));
+    demonstrationCollection = await response.json() as DemonstrationCollection;
+    updateRecordingPanel();
+  } catch (error) {
+    updateRecordingPanel(error instanceof Error ? error.message : "Unable to load lap library");
+  }
 };
 
 const restartReplay = (): void => {
@@ -238,9 +282,34 @@ const connect = (): void => {
     connectionElement.classList.add("online");
     connectionElement.lastChild!.textContent = " Live";
     sendInput();
+    updateRecordingPanel();
   });
   socket.addEventListener("message", (event) => {
-    const snapshot = JSON.parse(event.data) as Omit<ManualSnapshot, "receivedAt" | "current_progress">;
+    const payload = JSON.parse(event.data) as Omit<ManualSnapshot, "receivedAt" | "current_progress"> | RecordingStatus;
+    if (payload.type === "recording_status") {
+      recordingStatus = payload.status;
+      if (
+        payload.dataset_id
+        && payload.created_at
+        && payload.updated_at
+        && payload.path
+        && payload.lap_count !== undefined
+        && payload.max_lap_time_exclusive !== undefined
+      ) {
+        demonstrationCollection = {
+          dataset_id: payload.dataset_id,
+          created_at: payload.created_at,
+          updated_at: payload.updated_at,
+          status: "active",
+          lap_count: payload.lap_count,
+          max_lap_time_exclusive: payload.max_lap_time_exclusive,
+          path: payload.path,
+        };
+      }
+      updateRecordingPanel(payload.message);
+      return;
+    }
+    const snapshot = payload;
     if (snapshot.type !== "state") return;
     manualPrevious = manualCurrent;
     manualCurrent = { ...snapshot, current_progress: 0, receivedAt: performance.now() };
@@ -251,6 +320,8 @@ const connect = (): void => {
     connectionElement.className = "connection offline";
     connectionElement.lastChild!.textContent = " Reconnecting";
     clearInput();
+    recordingStatus = "discarded";
+    updateRecordingPanel("Connection lost · interrupted attempt discarded · reconnecting…");
     window.setTimeout(connect, 1000);
   });
 };
@@ -272,6 +343,9 @@ const updateManualHud = (state: ManualSnapshot): void => {
     toastTimer = window.setTimeout(() => toastElement.classList.remove("visible"), 2800);
   }
   previousLapCount = state.laps;
+  if (recordingStatus === "started") {
+    updateRecordingPanel(`Recording attempt · ${state.current_lap_time.toFixed(1)}s`);
+  }
 };
 
 const updateSensors = (state: RenderState): void => {
@@ -283,7 +357,11 @@ const updateSensors = (state: RenderState): void => {
 };
 
 const setMode = (nextMode: Mode): void => {
-  if (nextMode === "replay" && mode === "manual") clearInput();
+  if (nextMode === mode) return;
+  if (nextMode === "replay" && mode === "manual") {
+    clearInput();
+    socket?.send(JSON.stringify({ type: "manual_pause" }));
+  }
   mode = nextMode;
   shell.dataset.mode = mode;
   shell.dataset.review = comparingAll ? "compare" : "single";
@@ -291,6 +369,7 @@ const setMode = (nextMode: Mode): void => {
   replayModeButton.classList.toggle("active", mode === "replay");
   if (mode === "manual") {
     replayPlaying = false;
+    restartManual();
     if (manualCurrent) updateManualHud(manualCurrent);
   } else {
     crashElement.classList.remove("visible");
@@ -867,6 +946,7 @@ const render = (now: number): void => {
 
 const boot = async (): Promise<void> => {
   void loadRuns();
+  void loadDemonstrationLibrary();
   const response = await fetch("/api/track");
   if (!response.ok) throw new Error(`Unable to load track (${response.status})`);
   track = await response.json() as Track;

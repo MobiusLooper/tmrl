@@ -76,6 +76,14 @@
         <button class="restart" id="restart" type="button" title="Restart (R or Space)">
           <span>↻</span> Restart
         </button>
+        <aside class="record-panel" id="record-panel" aria-live="polite">
+          <div>
+            <p>Human lap library</p>
+            <strong id="record-status">Preparing automatic capture…</strong>
+            <span id="record-detail">Clean laps under 30.0s are saved automatically.</span>
+            <small id="record-path">artifacts/demonstrations/…</small>
+          </div>
+        </aside>
         <div class="controls-hint"><b>↑ / W</b> throttle <b>↓ / S</b> brake <b>← → / A D</b> steer</div>
 
         <div class="replay-controls" id="replay-controls">

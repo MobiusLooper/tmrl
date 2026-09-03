@@ -12,6 +12,7 @@ from backend.rl.dqn import (
     DQNConfig,
     DQNPolicy,
     QNetwork,
+    ReplayItem,
 )
 from backend.training.curriculum import AdaptiveCurriculum, CurriculumConfig
 from backend.training.dqn_training import _new_curriculum as _new_dqn_curriculum
@@ -57,6 +58,52 @@ def test_dqn_policy_is_greedy_and_snapshot_restores() -> None:
 
     assert action == DQNPolicy(restored).choose_action(OBSERVATION)
     assert restored.q_values(OBSERVATION) == pytest.approx(agent.q_values(OBSERVATION))
+
+
+def test_dqn_snapshot_restores_permanent_demonstration_buffer() -> None:
+    item = ReplayItem(OBSERVATION, int(DiscreteAction.THROTTLE), 2.0, OBSERVATION, True, 0.9)
+    agent = DQNAgent(Random(2), DQNConfig(warmup_steps=100), seed=2)
+    agent.set_demonstration_buffer((item,))
+
+    restored = DQNAgent.from_snapshot(agent.snapshot())
+
+    assert restored.demonstration_buffer == (item,)
+
+
+def test_dqn_reserves_configured_batch_share_for_demonstrations() -> None:
+    class RecordingRandom(Random):
+        def __init__(self) -> None:
+            super().__init__(4)
+            self.sample_sizes: list[int] = []
+
+        def sample(self, population, k, *, counts=None):
+            self.sample_sizes.append(k)
+            return super().sample(population, k, counts=counts)
+
+    rng = RecordingRandom()
+    config = DQNConfig(
+        batch_size=4,
+        warmup_steps=4,
+        n_step=1,
+        demonstration_mix=0.25,
+        demonstration_bc_weight=0,
+    )
+    agent = DQNAgent(rng, config, seed=4)
+    item = ReplayItem(OBSERVATION, int(DiscreteAction.THROTTLE), 1.0, OBSERVATION, True, 0.9)
+    agent.set_demonstration_buffer((item, item))
+
+    for _ in range(4):
+        agent.observe(OBSERVATION, DiscreteAction.THROTTLE, 1.0, OBSERVATION, True)
+
+    assert rng.sample_sizes[-2:] == [3, 1]
+
+
+def test_dqn_rejects_snapshot_from_previous_learning_environment() -> None:
+    snapshot = DQNAgent(Random(2), DQNConfig(warmup_steps=100), seed=2).snapshot()
+    snapshot.pop("learning_environment_version")
+
+    with pytest.raises(ValueError, match="learning environment version"):
+        DQNAgent.from_snapshot(snapshot)
 
 
 def test_dqn_exploration_uses_only_propulsive_actions_below_low_speed_threshold() -> None:

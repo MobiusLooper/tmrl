@@ -8,7 +8,7 @@ from backend.env.environment import DiscreteAction, Observation
 from .discretisation import OBSERVATION_SIZE, SPEED_INDEX, SPEED_THRESHOLDS, StateDiscretizer
 from .q_table import QTable
 
-TABULAR_ARCHITECTURE = "tabular-local-v6"
+TABULAR_ARCHITECTURE = "tabular-local-v7"
 LEGACY_TABULAR_ARCHITECTURE = "tabular-legacy"
 TABULAR_ACTIONS = (
     DiscreteAction.COAST,
